@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard | {{ app_name }}{% endblock %}
+{% block header_title %}System Dashboard{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-8">
+    <!-- Stats Cards -->
+    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+        <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">API Status</h3>
+        <p class="text-2xl font-semibold text-gray-500 mt-2" id="api-status">Checking...</p>
+    </div>
+    
+    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+        <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">Database Status</h3>
+        <p class="text-2xl font-semibold text-yellow-500 mt-2">Unconfigured</p>
+    </div>
+    
+    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+        <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">Active Model</h3>
+        <p class="text-2xl font-semibold text-blue-600 dark:text-blue-400 mt-2">BasicEngine</p>
+    </div>
+    
+    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+        <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">Telegram Backup</h3>
+        <p class="text-2xl font-semibold text-gray-500 mt-2">Not configured</p>
+    </div>
+</div>
+
+<div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+    <h3 class="text-lg font-semibold mb-4 text-gray-800 dark:text-gray-200">System Overview</h3>
+    <p class="text-gray-600 dark:text-gray-400 mb-4">
+        Welcome to the MY-AI Control Panel. This system provides complete management of the self-hosted AI engine, datasets, training, and integrations.
+    </p>
+    <div class="p-4 bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200 rounded-md">
+        <strong>Current Phase: 1 (Foundation)</strong><br>
+        FastAPI shell, basic UI, configuration, and health monitoring are operational.
+    </div>
+</div>
+{% endblock %}

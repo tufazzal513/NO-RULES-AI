@@ -1,0 +1,14 @@
+.env
+*.db
+*.sqlite
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+models/
+datasets/private/
+backups/
+secrets/
+logs/private/
+node_modules/
