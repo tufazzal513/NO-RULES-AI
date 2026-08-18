@@ -13,7 +13,19 @@ app.use(cors());
 app.use(express.json());
 
 // Initialize SQLite Database
-const dbPath = path.join(process.cwd(), "myai.db");
+let dbPath = path.join(process.cwd(), "myai.db");
+
+// Use DATABASE_URL from .env if provided (strip sqlite:/// prefix if present)
+if (process.env.DATABASE_URL) {
+  let customPath = process.env.DATABASE_URL;
+  if (customPath.startsWith("sqlite:///")) {
+    customPath = customPath.replace("sqlite:///", "");
+  } else if (customPath.startsWith("sqlite://")) {
+    customPath = customPath.replace("sqlite://", "");
+  }
+  dbPath = path.resolve(process.cwd(), customPath);
+}
+
 let db: any;
 try {
   db = new Database(dbPath);
