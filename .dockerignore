@@ -1,0 +1,10 @@
+node_modules
+dist
+myai.db
+myai.db-*
+.git
+.env
+.env.*
+*.log
+.aistudio
+assets/.aistudio
