@@ -28,11 +28,11 @@ ENV PORT=3000
 # Install build tools required for native modules in production
 RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 
-# Copy package files
-COPY package*.json ./
+# Copy ONLY package.json to avoid cross-platform package-lock issues with native dev binaries
+COPY package.json ./
 
 # Install ONLY production dependencies
-RUN npm install --omit=dev
+RUN npm install --omit=dev --no-package-lock
 
 # Copy the built artifacts from the builder stage
 COPY --from=builder /app/dist ./dist
