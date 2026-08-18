@@ -28,6 +28,12 @@ if (process.env.DATABASE_URL) {
 
 let db: any;
 try {
+  // Ensure the directory exists
+  const dbDir = path.dirname(dbPath);
+  if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
+  }
+
   db = new Database(dbPath);
   console.log("Connected to SQLite database at", dbPath);
   db.pragma('journal_mode = WAL');
