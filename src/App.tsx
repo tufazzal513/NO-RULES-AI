@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect } from 'react';
-import { Menu, X, Activity, Database, BrainCircuit, MessageSquare, DatabaseBackup, Users, Settings } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Menu, X, Activity, Database, BrainCircuit, MessageSquare, DatabaseBackup, Users, Settings, Send, Sparkles, Paperclip, Mic } from 'lucide-react';
 
 export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -23,6 +23,114 @@ export default function App() {
     datasetCount: 'Loading...'
   });
   const [backupStatus, setBackupStatus] = useState('');
+
+  // AI Chat States
+  const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
+  const [chatSessions, setChatSessions] = useState<{id: number, title: string, created_at: string}[]>([]);
+  const [messages, setMessages] = useState<{role: 'user' | 'ai', content: string}[]>([
+    { role: 'ai', content: 'Hello! I am your personal AI. Ready to chat when you are.' }
+  ]);
+  const [chatInput, setChatInput] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Load chat sessions on mount
+  useEffect(() => {
+    fetch('/api/v1/chats')
+      .then(res => res.json())
+      .then(data => setChatSessions(data))
+      .catch(console.error);
+  }, []);
+
+  // Load messages when session changes
+  useEffect(() => {
+    if (activeSessionId) {
+      fetch(`/api/v1/chats/${activeSessionId}/messages`)
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.length > 0) {
+            setMessages(data);
+          } else {
+            setMessages([{ role: 'ai', content: 'Hello! I am your personal AI. Ready to chat when you are.' }]);
+          }
+        })
+        .catch(console.error);
+    } else {
+      setMessages([{ role: 'ai', content: 'Hello! I am your personal AI. Ready to chat when you are.' }]);
+    }
+  }, [activeSessionId]);
+
+  const scrollToBottom = () => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, isTyping]);
+
+  const createNewSession = async () => {
+    try {
+      const res = await fetch('/api/v1/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'New Chat' })
+      });
+      const data = await res.json();
+      setChatSessions([data, ...chatSessions]);
+      setActiveSessionId(data.id);
+      return data.id;
+    } catch (error) {
+      console.error("Failed to create chat session:", error);
+      return null;
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!chatInput.trim()) return;
+    
+    const userMsg = chatInput.trim();
+    setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+    setChatInput('');
+    setIsTyping(true);
+
+    let currentSessionId = activeSessionId;
+    if (!currentSessionId) {
+      currentSessionId = await createNewSession();
+    }
+
+    if (currentSessionId) {
+      // Save user message to DB
+      await fetch(`/api/v1/chats/${currentSessionId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'user', content: userMsg })
+      });
+    }
+
+    // Mock AI Response (Backend pending)
+    setTimeout(async () => {
+      const aiReply = 'I am currently running in UI demo mode. Once the Python backend is connected, I will process this prompt properly!';
+      
+      if (currentSessionId) {
+        // Save AI message to DB
+        await fetch(`/api/v1/chats/${currentSessionId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: 'ai', content: aiReply })
+        });
+      }
+
+      setMessages(prev => [...prev, { role: 'ai', content: aiReply }]);
+      setIsTyping(false);
+    }, 1500);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
+    }
+  };
 
   const fetchHealth = async () => {
     try {
@@ -180,6 +288,125 @@ export default function App() {
             </div>
           </>
         );
+      case 'AI Chat':
+        return (
+          <div className='col-span-1 md:col-span-12 flex h-[80vh] md:h-full bg-[#131314] rounded-2xl border border-slate-800/50 overflow-hidden shadow-2xl relative'>
+            
+            {/* Chat History Sidebar */}
+            <div className='w-64 border-r border-slate-800/50 flex flex-col hidden md:flex shrink-0'>
+              <div className='p-4 border-b border-slate-800/50 flex justify-between items-center'>
+                <h3 className='text-sm font-medium text-slate-300'>Chat History</h3>
+                <button 
+                  onClick={() => {
+                    setActiveSessionId(null);
+                    setMessages([{ role: 'ai', content: 'Hello! I am your personal AI. Ready to chat when you are.' }]);
+                  }}
+                  className='p-1.5 hover:bg-slate-800/50 rounded-lg text-slate-400 hover:text-white transition-colors'
+                  title="New Chat"
+                >
+                  <MessageSquare size={16} />
+                </button>
+              </div>
+              <div className='flex-1 overflow-y-auto p-2 space-y-1'>
+                {chatSessions.map((session) => (
+                  <button
+                    key={session.id}
+                    onClick={() => setActiveSessionId(session.id)}
+                    className={`w-full text-left px-3 py-2.5 rounded-lg text-sm truncate transition-colors ${
+                      activeSessionId === session.id 
+                        ? 'bg-indigo-500/10 text-indigo-300 border border-indigo-500/20' 
+                        : 'text-slate-400 hover:bg-slate-800/30'
+                    }`}
+                  >
+                    {session.title}
+                  </button>
+                ))}
+                {chatSessions.length === 0 && (
+                  <div className='text-xs text-slate-500 text-center p-4'>No chats yet</div>
+                )}
+              </div>
+            </div>
+
+            {/* Main Chat Area */}
+            <div className='flex-1 flex flex-col min-w-0'>
+              {/* Chat Messages Area */}
+              <div className='flex-1 overflow-y-auto p-4 md:p-8 space-y-6'>
+                {messages.map((msg, idx) => (
+                <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  {msg.role === 'ai' && (
+                    <div className='w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center mr-4 mt-1 flex-shrink-0'>
+                      <Sparkles size={16} className='text-indigo-400' />
+                    </div>
+                  )}
+                  <div className={`max-w-[85%] md:max-w-[70%] text-[15px] leading-relaxed ${
+                    msg.role === 'user' 
+                      ? 'bg-slate-800/80 text-slate-200 px-5 py-3 rounded-2xl rounded-tr-sm' 
+                      : 'text-slate-300 py-1'
+                  }`}>
+                    {msg.content}
+                  </div>
+                </div>
+              ))}
+              
+              {isTyping && (
+                <div className='flex justify-start'>
+                  <div className='w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center mr-4 flex-shrink-0'>
+                    <Sparkles size={16} className='text-indigo-400' />
+                  </div>
+                  <div className='flex space-x-2 items-center py-3'>
+                    <div className='w-2 h-2 bg-indigo-500/50 rounded-full animate-bounce' style={{ animationDelay: '0ms' }}></div>
+                    <div className='w-2 h-2 bg-indigo-500/50 rounded-full animate-bounce' style={{ animationDelay: '150ms' }}></div>
+                    <div className='w-2 h-2 bg-indigo-500/50 rounded-full animate-bounce' style={{ animationDelay: '300ms' }}></div>
+                  </div>
+                </div>
+              )}
+              <div ref={chatEndRef} />
+            </div>
+
+            {/* Input Area */}
+            <div className='p-4 md:p-6 bg-gradient-to-t from-[#131314] via-[#131314] to-transparent shrink-0'>
+              <div className='max-w-4xl mx-auto'>
+                <div className='relative bg-[#1E1F22] rounded-3xl border border-slate-700/50 flex items-end p-2 px-4 shadow-lg focus-within:ring-1 focus-within:ring-slate-600 focus-within:border-slate-600 transition-all'>
+                  
+                  <button className='p-2 md:p-3 text-slate-400 hover:text-slate-200 transition-colors rounded-full hover:bg-slate-800/50 flex-shrink-0 mb-1'>
+                    <Paperclip size={20} />
+                  </button>
+                  
+                  <textarea 
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Message MY-AI..."
+                    className='w-full bg-transparent text-slate-200 placeholder-slate-500 border-none focus:ring-0 resize-none max-h-32 min-h-[44px] py-3 px-2 outline-none text-[15px]'
+                    rows={1}
+                  />
+                  
+                  <div className='flex items-center gap-1 mb-1'>
+                    {!chatInput.trim() && (
+                      <button className='p-2 md:p-3 text-slate-400 hover:text-slate-200 transition-colors rounded-full hover:bg-slate-800/50 flex-shrink-0'>
+                        <Mic size={20} />
+                      </button>
+                    )}
+                    <button 
+                      onClick={handleSendMessage}
+                      disabled={!chatInput.trim()}
+                      className={`p-2 md:p-3 rounded-full transition-colors flex-shrink-0 ${
+                        chatInput.trim() 
+                          ? 'bg-slate-200 text-slate-900 hover:bg-white' 
+                          : 'bg-transparent text-slate-600'
+                      }`}>
+                      <Send size={18} className={chatInput.trim() ? 'ml-0.5' : ''} />
+                    </button>
+                  </div>
+                </div>
+                <div className='text-center mt-3 text-[11px] text-slate-500 font-medium'>
+                  MY-AI can make mistakes. Consider verifying important information.
+                </div>
+              </div>
+            </div>
+            </div>
+          </div>
+        );
       default:
         return (
           <div className='col-span-1 md:col-span-12 bg-[#12141C] border border-slate-800/50 rounded-2xl p-10 shadow-xl flex flex-col items-center justify-center text-center min-h-[400px]'>
@@ -272,7 +499,7 @@ export default function App() {
           </div>
         </header>
         
-        <section className='p-4 md:p-8 flex-1 grid grid-cols-1 md:grid-cols-12 grid-rows-none gap-4 md:gap-6 overflow-y-auto content-start'>
+        <section className={`flex-1 overflow-y-auto content-start ${activeTab === 'AI Chat' ? 'p-4 md:p-6 flex flex-col' : 'p-4 md:p-8 grid grid-cols-1 md:grid-cols-12 grid-rows-none gap-4 md:gap-6'}`}>
           {renderContent()}
         </section>
       </main>

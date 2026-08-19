@@ -49,6 +49,14 @@ try {
       title TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER,
+      role TEXT CHECK(role IN ('user', 'ai')),
+      content TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (session_id) REFERENCES conversations(id) ON DELETE CASCADE
+    );
   `);
 } catch (err) {
   console.error("Error opening database:", err);
@@ -133,6 +141,45 @@ app.post("/api/v1/users/seed", (req, res) => {
       return res.json({ success: true, message: "User already exists" });
     }
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// Chat API Routes
+app.get("/api/v1/chats", (req, res) => {
+  try {
+    const chats = db.prepare("SELECT * FROM conversations ORDER BY created_at DESC").all();
+    res.json(chats);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/v1/chats", (req, res) => {
+  const { title } = req.body;
+  try {
+    const info = db.prepare("INSERT INTO conversations (title) VALUES (?)").run(title || 'New Chat');
+    res.json({ id: info.lastInsertRowid, title: title || 'New Chat' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/v1/chats/:id/messages", (req, res) => {
+  try {
+    const messages = db.prepare("SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC").all(req.params.id);
+    res.json(messages);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/v1/chats/:id/messages", (req, res) => {
+  const { role, content } = req.body;
+  try {
+    db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)").run(req.params.id, role, content);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 
