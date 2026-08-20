@@ -5,6 +5,7 @@ import Database from "better-sqlite3";
 import fs from "fs";
 import cors from "cors";
 import { TelegramStorage } from "./server/telegram.ts";
+import { AIEngine } from "./server/ai/engine.ts";
 
 // Initialize express app
 const app = express();
@@ -67,6 +68,23 @@ try {
       telegram_file_id TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS knowledge (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT,
+      content TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS memory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      key TEXT UNIQUE,
+      value TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS ai_model (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 } catch (err) {
   console.error("Error opening database:", err);
@@ -77,6 +95,9 @@ const telegram = new TelegramStorage({
   botToken: process.env.TELEGRAM_BOT_TOKEN,
   chatId: process.env.TELEGRAM_STORAGE_CHAT_ID,
 });
+
+// Initialize the local AI brain (offline — no external AI service)
+const ai = new AIEngine(db);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -358,6 +379,146 @@ app.post("/api/v1/chats/:id/messages", (req, res) => {
     const msg = { id: info.lastInsertRowid, session_id: req.params.id, role, content };
     tryMirror("chat_messages", info.lastInsertRowid, msg);
     res.json({ success: true, id: info.lastInsertRowid });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// AI Brain API
+// ---------------------------------------------------------------------------
+
+/** Main chat endpoint — saves both messages and returns the AI's reply + mode. */
+app.post("/api/v1/ai/chat", (req, res) => {
+  try {
+    const { sessionId, message } = req.body || {};
+    if (!message || typeof message !== "string" || !message.trim()) {
+      return res.status(400).json({ error: "message is required" });
+    }
+
+    let sid: number | null = sessionId ? Number(sessionId) : null;
+    if (!sid) {
+      const title = message.trim().slice(0, 40) || "New Chat";
+      const info = db.prepare("INSERT INTO conversations (title) VALUES (?)").run(title);
+      sid = Number(info.lastInsertRowid);
+      tryMirror("conversations", sid, { id: sid, title });
+    }
+
+    const um = db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'user', ?)").run(sid, message.trim());
+    tryMirror("chat_messages", um.lastInsertRowid, { id: um.lastInsertRowid, session_id: sid, role: "user", content: message.trim() });
+
+    const result = ai.reply(message.trim());
+
+    const am = db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'ai', ?)").run(sid, result.reply);
+    tryMirror("chat_messages", am.lastInsertRowid, { id: am.lastInsertRowid, session_id: sid, role: "ai", content: result.reply });
+
+    res.json({ sessionId: sid, reply: result.reply, mode: result.mode });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/v1/ai/train", (req, res) => {
+  try {
+    const stats = ai.train();
+    res.json({ success: true, message: "Model trained on your messages.", stats });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/v1/ai/status", (req, res) => {
+  try {
+    res.json(ai.status());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Knowledge (local RAG documents)
+app.get("/api/v1/knowledge", (req, res) => {
+  try {
+    res.json(db.prepare("SELECT * FROM knowledge ORDER BY id DESC").all());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/v1/knowledge", (req, res) => {
+  const { title, content } = req.body || {};
+  if (!content || typeof content !== "string" || !content.trim()) {
+    return res.status(400).json({ error: "content is required" });
+  }
+  try {
+    const info = db.prepare("INSERT INTO knowledge (title, content) VALUES (?, ?)").run(title || "Untitled", content.trim());
+    tryMirror("knowledge", info.lastInsertRowid, { id: info.lastInsertRowid, title: title || "Untitled", content: content.trim() });
+    res.json({ success: true, id: Number(info.lastInsertRowid) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/v1/knowledge/:id", (req, res) => {
+  try {
+    db.prepare("DELETE FROM knowledge WHERE id = ?").run(req.params.id);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Memory (facts about the user)
+app.get("/api/v1/memory", (req, res) => {
+  try {
+    res.json(db.prepare("SELECT * FROM memory ORDER BY id DESC").all());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/v1/memory", (req, res) => {
+  const { key, value } = req.body || {};
+  if (!key || !value) return res.status(400).json({ error: "key and value are required" });
+  try {
+    db.prepare("INSERT INTO memory (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/v1/memory/:id", (req, res) => {
+  try {
+    db.prepare("DELETE FROM memory WHERE id = ?").run(req.params.id);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Dataset export — conversation pairs in ShareGPT-style JSONL (for fine-tuning)
+app.get("/api/v1/dataset/export", (req, res) => {
+  try {
+    const sessions = db.prepare("SELECT DISTINCT session_id FROM chat_messages").all() as { session_id: number }[];
+    const lines: string[] = [];
+    for (const s of sessions) {
+      const msgs = db.prepare("SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY id ASC").all(s.session_id) as { role: string; content: string }[];
+      for (let i = 0; i < msgs.length - 1; i++) {
+        if (msgs[i].role === "user" && msgs[i + 1].role === "ai") {
+          lines.push(
+            JSON.stringify({
+              messages: [
+                { role: "user", content: msgs[i].content },
+                { role: "assistant", content: msgs[i + 1].content },
+              ],
+            })
+          );
+        }
+      }
+    }
+    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+    res.setHeader("Content-Disposition", "attachment; filename=myai-dataset.jsonl");
+    res.send(lines.join("\n"));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

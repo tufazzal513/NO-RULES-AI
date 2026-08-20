@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { Menu, X, Activity, Database, BrainCircuit, MessageSquare, DatabaseBackup, Users, Settings, Send, Sparkles, Paperclip, Mic } from 'lucide-react';
+import { Menu, X, Activity, Database, BrainCircuit, MessageSquare, DatabaseBackup, Users, Settings, Send, Sparkles, Paperclip, Mic, Volume2, Trash2, Download, Play } from 'lucide-react';
 
 export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -81,11 +81,130 @@ export default function App() {
     }
   };
 
+  // AI Brain states
+  const [aiStatus, setAiStatus] = useState<any>({});
+  const [knowledge, setKnowledge] = useState<any[]>([]);
+  const [memory, setMemory] = useState<any[]>([]);
+  const [knowTitle, setKnowTitle] = useState('');
+  const [knowContent, setKnowContent] = useState('');
+  const [memKey, setMemKey] = useState('');
+  const [memValue, setMemValue] = useState('');
+  const [brainMsg, setBrainMsg] = useState('');
+
+  const fetchBrain = async () => {
+    try {
+      const [s, k, m] = await Promise.all([
+        fetch('/api/v1/ai/status').then(r => r.json()),
+        fetch('/api/v1/knowledge').then(r => r.json()),
+        fetch('/api/v1/memory').then(r => r.json()),
+      ]);
+      setAiStatus(s);
+      setKnowledge(Array.isArray(k) ? k : []);
+      setMemory(Array.isArray(m) ? m : []);
+    } catch (e) {
+      console.error('Failed to fetch brain data:', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchBrain();
+  }, []);
+
+  const trainModel = async () => {
+    setBrainMsg('Training...');
+    try {
+      const res = await fetch('/api/v1/ai/train', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Train failed');
+      setBrainMsg(`Trained on ${data.stats?.trainedMessages ?? 0} messages. Model ready! ✨`);
+      fetchBrain();
+    } catch (e: any) {
+      setBrainMsg('Error: ' + e.message);
+    }
+  };
+
+  const addKnowledge = async () => {
+    if (!knowContent.trim()) return;
+    setBrainMsg('Adding knowledge...');
+    try {
+      const res = await fetch('/api/v1/knowledge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: knowTitle.trim() || 'Untitled', content: knowContent.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      setKnowTitle('');
+      setKnowContent('');
+      setBrainMsg('Knowledge added! 📚');
+      fetchBrain();
+    } catch (e: any) {
+      setBrainMsg('Error: ' + e.message);
+    }
+  };
+
+  const deleteKnowledge = async (id: number) => {
+    try {
+      await fetch(`/api/v1/knowledge/${id}`, { method: 'DELETE' });
+      fetchBrain();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const addMemory = async () => {
+    if (!memKey.trim() || !memValue.trim()) return;
+    setBrainMsg('Saving memory...');
+    try {
+      const res = await fetch('/api/v1/memory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: memKey.trim(), value: memValue.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      setMemKey('');
+      setMemValue('');
+      setBrainMsg('Memory saved! 🧠');
+      fetchBrain();
+    } catch (e: any) {
+      setBrainMsg('Error: ' + e.message);
+    }
+  };
+
+  const deleteMemory = async (id: number) => {
+    try {
+      await fetch(`/api/v1/memory/${id}`, { method: 'DELETE' });
+      fetchBrain();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const exportDataset = () => {
+    window.location.href = '/api/v1/dataset/export';
+  };
+
+  const speak = (text: string) => {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const modeMeta: Record<string, {icon: string, label: string}> = {
+    intent: { icon: '⚙️', label: 'Intent' },
+    memory: { icon: '🧠', label: 'Memory' },
+    knowledge: { icon: '📚', label: 'Knowledge' },
+    generate: { icon: '✍️', label: 'My Model' },
+    fallback: { icon: '✨', label: 'Assistant' },
+  };
+
   // AI Chat States
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
   const [chatSessions, setChatSessions] = useState<{id: number, title: string, created_at: string}[]>([]);
-  const [messages, setMessages] = useState<{role: 'user' | 'ai', content: string}[]>([
-    { role: 'ai', content: 'Hello! I am your personal AI. Ready to chat when you are.' }
+  const [messages, setMessages] = useState<{role: 'user' | 'ai', content: string, mode?: string}[]>([
+    { role: 'ai', content: "Hello! 👋 I'm your personal AI — fully yours and offline. Ask me anything, or add knowledge and train me in the AI Brain tab." }
   ]);
   const [chatInput, setChatInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -108,12 +227,12 @@ export default function App() {
           if (data && data.length > 0) {
             setMessages(data);
           } else {
-            setMessages([{ role: 'ai', content: 'Hello! I am your personal AI. Ready to chat when you are.' }]);
+            setMessages([{ role: 'ai', content: "Hello! 👋 I'm your personal AI — fully yours and offline." }]);
           }
         })
         .catch(console.error);
     } else {
-      setMessages([{ role: 'ai', content: 'Hello! I am your personal AI. Ready to chat when you are.' }]);
+      setMessages([{ role: 'ai', content: "Hello! 👋 I'm your personal AI — fully yours and offline." }]);
     }
   }, [activeSessionId]);
 
@@ -150,36 +269,25 @@ export default function App() {
     setChatInput('');
     setIsTyping(true);
 
-    let currentSessionId = activeSessionId;
-    if (!currentSessionId) {
-      currentSessionId = await createNewSession();
-    }
-
-    if (currentSessionId) {
-      // Save user message to DB
-      await fetch(`/api/v1/chats/${currentSessionId}/messages`, {
+    try {
+      const res = await fetch('/api/v1/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: 'user', content: userMsg })
+        body: JSON.stringify({ sessionId: activeSessionId, message: userMsg })
       });
-    }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Request failed');
 
-    // Mock AI Response (Backend pending)
-    setTimeout(async () => {
-      const aiReply = 'I am currently running in UI demo mode. Once the Python backend is connected, I will process this prompt properly!';
-      
-      if (currentSessionId) {
-        // Save AI message to DB
-        await fetch(`/api/v1/chats/${currentSessionId}/messages`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ role: 'ai', content: aiReply })
-        });
+      if (!activeSessionId && data.sessionId) {
+        setActiveSessionId(data.sessionId);
+        setChatSessions(prev => [{ id: data.sessionId, title: userMsg.slice(0, 30), created_at: '' }, ...prev]);
       }
-
-      setMessages(prev => [...prev, { role: 'ai', content: aiReply }]);
+      setMessages(prev => [...prev, { role: 'ai', content: data.reply, mode: data.mode }]);
+    } catch (error: any) {
+      setMessages(prev => [...prev, { role: 'ai', content: 'Error: ' + error.message }]);
+    } finally {
       setIsTyping(false);
-    }, 1500);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -254,7 +362,7 @@ export default function App() {
   const navItems = [
     { name: 'Dashboard', icon: <Activity size={18} /> },
     { name: 'AI Chat', icon: <MessageSquare size={18} /> },
-    { name: 'Models', icon: <BrainCircuit size={18} /> },
+    { name: 'AI Brain', icon: <BrainCircuit size={18} /> },
     { name: 'Datasets', icon: <Database size={18} /> },
     { name: 'Telegram Storage', icon: <DatabaseBackup size={18} /> },
     { name: 'Users', icon: <Users size={18} /> },
@@ -395,12 +503,28 @@ export default function App() {
                       <Sparkles size={16} className='text-indigo-400' />
                     </div>
                   )}
-                  <div className={`max-w-[85%] md:max-w-[70%] text-[15px] leading-relaxed ${
+                  <div className={`max-w-[85%] md:max-w-[70%] ${
                     msg.role === 'user' 
                       ? 'bg-slate-800/80 text-slate-200 px-5 py-3 rounded-2xl rounded-tr-sm' 
                       : 'text-slate-300 py-1'
                   }`}>
-                    {msg.content}
+                    <div className='text-[15px] leading-relaxed whitespace-pre-wrap'>{msg.content}</div>
+                    {msg.role === 'ai' && (
+                      <div className='mt-1.5 flex items-center gap-2'>
+                        {msg.mode && modeMeta[msg.mode] && (
+                          <span className='inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-slate-500 bg-slate-800/50 border border-slate-700/50 px-2 py-0.5 rounded-full'>
+                            {modeMeta[msg.mode].icon} {modeMeta[msg.mode].label}
+                          </span>
+                        )}
+                        <button
+                          onClick={() => speak(msg.content)}
+                          className='p-1 text-slate-500 hover:text-slate-200 transition-colors rounded-full hover:bg-slate-800/50'
+                          title='Speak'
+                        >
+                          <Volume2 size={14} />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -545,6 +669,108 @@ export default function App() {
             </div>
           </>
         );
+      case 'AI Brain':
+        return (
+          <>
+            {/* Model status + actions */}
+            <div className='col-span-1 md:col-span-12 bg-[#12141C] border border-slate-800/50 rounded-2xl p-6 shadow-xl'>
+              <div className='flex flex-wrap items-center justify-between gap-4'>
+                <div>
+                  <div className='text-xs font-bold text-indigo-400 uppercase tracking-widest mb-2'>Local AI Model</div>
+                  <div className='text-xl md:text-2xl font-light text-white'>
+                    {aiStatus.trained ? 'Trained ✓' : 'Not trained yet'}
+                  </div>
+                  <div className='mt-2 text-xs text-slate-500 font-mono'>
+                    Messages: {aiStatus.corpusMessages ?? '...'} · Knowledge: {aiStatus.knowledgeDocs ?? '...'} · Memory: {aiStatus.memoryFacts ?? '...'}
+                    {aiStatus.trained && <> · Chains: {aiStatus.modelChains} · Vocab: {aiStatus.vocabSize}</>}
+                  </div>
+                </div>
+                <div className='flex gap-3'>
+                  <button onClick={trainModel} className='px-5 py-3 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/30 rounded-xl text-sm font-medium transition-colors flex items-center gap-2'>
+                    <Play size={16} /> Train on My Messages
+                  </button>
+                  <button onClick={exportDataset} className='px-5 py-3 bg-slate-800/40 hover:bg-slate-800/60 text-cyan-300 border border-cyan-500/20 rounded-xl text-sm font-medium transition-colors flex items-center gap-2'>
+                    <Download size={16} /> Export Dataset
+                  </button>
+                </div>
+              </div>
+              {brainMsg && <div className='mt-4 text-xs text-slate-300 p-3 bg-slate-800/30 rounded-lg'>{brainMsg}</div>}
+            </div>
+
+            {/* Knowledge manager */}
+            <div className='col-span-1 md:col-span-6 bg-[#12141C] border border-slate-800/50 rounded-2xl p-6 shadow-xl'>
+              <div className='text-xs font-bold text-white uppercase tracking-widest mb-4'>Knowledge 📚</div>
+              <div className='space-y-2 mb-4'>
+                <input
+                  value={knowTitle}
+                  onChange={(e) => setKnowTitle(e.target.value)}
+                  placeholder='Title'
+                  className='w-full bg-slate-800/40 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 outline-none focus:border-indigo-500/50'
+                />
+                <textarea
+                  value={knowContent}
+                  onChange={(e) => setKnowContent(e.target.value)}
+                  placeholder='Paste your notes, documents, or anything the AI should know...'
+                  rows={3}
+                  className='w-full bg-slate-800/40 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 outline-none focus:border-indigo-500/50 resize-none'
+                />
+                <button onClick={addKnowledge} className='w-full py-2 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/30 rounded-lg text-sm font-medium transition-colors'>
+                  Add Knowledge
+                </button>
+              </div>
+              <div className='space-y-2 max-h-56 overflow-y-auto'>
+                {knowledge.length === 0 && <div className='text-xs text-slate-500 text-center p-4'>No knowledge yet. Add your documents above.</div>}
+                {knowledge.map((k: any) => (
+                  <div key={k.id} className='p-3 bg-slate-800/20 rounded-lg border border-slate-800/50 flex justify-between items-start gap-2'>
+                    <div className='min-w-0'>
+                      <div className='text-xs font-medium text-slate-200 truncate'>{k.title}</div>
+                      <div className='text-[11px] text-slate-500 truncate mt-0.5'>{k.content.slice(0, 80)}</div>
+                    </div>
+                    <button onClick={() => deleteKnowledge(k.id)} className='p-1.5 text-slate-500 hover:text-red-400 transition-colors shrink-0'>
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Memory manager */}
+            <div className='col-span-1 md:col-span-6 bg-[#12141C] border border-slate-800/50 rounded-2xl p-6 shadow-xl'>
+              <div className='text-xs font-bold text-white uppercase tracking-widest mb-4'>Memory 🧠</div>
+              <div className='flex gap-2 mb-4'>
+                <input
+                  value={memKey}
+                  onChange={(e) => setMemKey(e.target.value)}
+                  placeholder='Key (e.g. name)'
+                  className='flex-1 bg-slate-800/40 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 outline-none focus:border-indigo-500/50'
+                />
+                <input
+                  value={memValue}
+                  onChange={(e) => setMemValue(e.target.value)}
+                  placeholder='Value'
+                  className='flex-1 bg-slate-800/40 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 outline-none focus:border-indigo-500/50'
+                />
+                <button onClick={addMemory} className='px-3 py-2 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/30 rounded-lg text-sm font-medium transition-colors shrink-0'>
+                  Save
+                </button>
+              </div>
+              <div className='space-y-2 max-h-56 overflow-y-auto'>
+                {memory.length === 0 && <div className='text-xs text-slate-500 text-center p-4'>No memories yet. Try telling the AI "My name is ..." in chat.</div>}
+                {memory.map((m: any) => (
+                  <div key={m.id} className='p-3 bg-slate-800/20 rounded-lg border border-slate-800/50 flex justify-between items-center gap-2'>
+                    <div className='min-w-0'>
+                      <div className='text-xs font-medium text-slate-200 truncate'>{m.key}</div>
+                      <div className='text-[11px] text-slate-500 truncate mt-0.5'>{m.value}</div>
+                    </div>
+                    <button onClick={() => deleteMemory(m.id)} className='p-1.5 text-slate-500 hover:text-red-400 transition-colors shrink-0'>
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        );
       default:
         return (
           <div className='col-span-1 md:col-span-12 bg-[#12141C] border border-slate-800/50 rounded-2xl p-10 shadow-xl flex flex-col items-center justify-center text-center min-h-[400px]'>
@@ -553,9 +779,9 @@ export default function App() {
             </div>
             <h2 className='text-2xl font-light text-white mb-3'>{activeTab}</h2>
             <p className='text-slate-400 max-w-md'>
-              {activeTab === 'AI Chat' ? 'AI core and model interfaces are pending implementation (Phase 2 & 3).' :
-               activeTab === 'Telegram Storage' ? 'Configuration required. Please provide TELEGRAM_BOT_TOKEN and TELEGRAM_STORAGE_CHAT_ID.' :
-               activeTab === 'Datasets' ? 'Dataset management module is pending implementation (Phase 13).' :
+              {activeTab === 'Datasets' ? 'Use "AI Brain → Export Dataset" to download your chat data as a training dataset (JSONL).' :
+               activeTab === 'Users' ? 'User management is coming soon.' :
+               activeTab === 'Settings' ? 'Settings are coming soon.' :
                'Not implemented yet.'}
             </p>
             <button 

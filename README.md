@@ -5,12 +5,17 @@ A self-hosted General AI platform with a built-in REST API and web-based control
 ## Features
 
 - REST API for AI interactions
+- **Offline personal AI brain** — no external AI service: local memory,
+  knowledge retrieval (RAG over your own documents), a trainable text model
+  that learns your writing style, plus a safe math engine.
 - Admin Control Panel (Web Dashboard)
 - Extensible Model Interface
 - Database Support (SQLite / PostgreSQL)
 - **Telegram Cloud Database** — a free, unlimited cloud store built on a Telegram
   bot + private channel. Every record is mirrored to the channel; full JSON
   snapshots can be restored any time. See [`TELEGRAM_SETUP.md`](./TELEGRAM_SETUP.md).
+- **Train your own model** — LoRA fine-tuning pipeline for a fully personal AI.
+  See [`training/README.md`](./training/README.md).
 - Render Deployment Ready
 
 ## Deployment on Render
