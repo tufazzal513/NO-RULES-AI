@@ -1,11 +1,21 @@
 services:
   - type: web
-    name: my-ai-service
-    env: python
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    name: no-rules-ai
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/v1/health/detailed
+    autoDeployTrigger: commit
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.10.13
-      - key: ENVIRONMENT
+      - key: NODE_ENV
         value: production
+      # Render Free has an ephemeral filesystem. See DEPLOY_RENDER.md before
+      # storing important SQLite data on this plan.
+      - key: DATABASE_URL
+        value: sqlite:///./data/myai.db
+      # Secrets are entered in Render and are never committed to Git.
+      # Leave both blank if Telegram is not needed yet.
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_STORAGE_CHAT_ID
+        sync: false

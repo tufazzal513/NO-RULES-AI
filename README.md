@@ -23,17 +23,20 @@ A self-hosted General AI platform with a built-in REST API and web-based control
 
 ## Deployment on Render
 
-This project natively supports Render.
+The repository includes a Dockerfile and a ready-to-use `render.yaml` Blueprint
+for the current Node.js application.
 
-1.  **Create GitHub repository:** Push this project to a new GitHub repository.
-2.  **Connect repository to Render:** Go to your Render dashboard and click **New > Web Service**.
-3.  Select your repository.
-4.  **Settings:**
-    - **Language:** Python 3
-    - **Build Command:** `pip install -r requirements.txt`
-    - **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
-5.  **Environment Variables:** Add the variables listed in `.env.example`.
-6.  **Deploy:** Click "Create Web Service".
+1. Push the repository to GitHub.
+2. In Render, choose **New > Blueprint**.
+3. Select this repository and apply the Blueprint.
+4. Enter `TELEGRAM_BOT_TOKEN` and `TELEGRAM_STORAGE_CHAT_ID` as Render secrets
+   (or leave them blank until Telegram is configured).
+5. Open `/api/v1/health/detailed` on the deployed URL to verify the service.
+
+**Important:** Render Free services sleep after inactivity and their local SQLite
+files are ephemeral. For durable data and an always-on Telegram bot, use a paid
+service with a persistent disk. See the complete Bengali guide:
+[`DEPLOY_RENDER.md`](./DEPLOY_RENDER.md).
 
 ## Custom Domain Setup
 
@@ -44,8 +47,8 @@ Render supports custom domains natively. To add one:
 4. Configure your DNS provider with the CNAME/A records provided by Render.
 5. Your API will now be available at `https://your-domain.com/api/v1/...` without any code changes!
 
-## API Documentation
+## API check
 
-Once deployed, visit:
-- `https://your-domain.com/docs` for interactive Swagger UI.
-- `https://your-domain.com/redoc` for ReDoc.
+Once deployed, visit `https://your-domain.com/api/v1/health/detailed` to verify
+that the API, SQLite database, local AI brain, and Telegram configuration are
+available.
