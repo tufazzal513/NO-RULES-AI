@@ -2,28 +2,47 @@
 
 এই গাইডটি বর্তমান **Node.js + Express + React + SQLite** অ্যাপের জন্য। কোনো OpenAI, Gemini বা অন্য বাইরের AI API লাগবে না।
 
-## আগে গুরুত্বপূর্ণ সিদ্ধান্ত
+## 🧭 আর্কিটেকচার — Render Free-তে ডেটা কীভাবে টিকে থাকে
 
-### Free plan — শুধু পরীক্ষা/ডেমোর জন্য
+| স্তর | ভূমিকা | স্থায়ী? |
+|---|---|---|
+| **Telegram private channel** | **Permanent backup / source of truth** | ✅ চিরস্থায়ী |
+| **Render-এর SQLite** | **Temporary cache** ও data processing DB | ❌ restart-এ মুছে যায় |
 
-Render Free web service ১৫ মিনিট inbound traffic না পেলে ঘুমিয়ে যায়। ঘুমানো বা restart/redeploy হলে local filesystem-এর পরিবর্তন হারায়। তাই SQLite-এর chat, memory ও knowledge স্থায়ী থাকবে না। Telegram bot-ও service ঘুমিয়ে থাকলে উত্তর দেবে না।
+Render Free-এর filesystem **ephemeral** — restart, redeploy বা sleep থেকে wake হলে `myai.db` মুছে যেতে পারে। তাই এই অ্যাপে Telegram private channel-ই আসল ডাটাবেস।
 
-Free plan ব্যবহার করলে:
+কী ঘটে:
 
-- Telegram snapshot নিয়মিত নিন।
-- গুরুত্বপূর্ণ data হারাতে পারে ধরে নিন।
-- browser-এ app URL খুললে service আবার চালু হবে; cold start কিছু সময় নিতে পারে।
+1. Render Free ১৫ মিনিট traffic না পেলে **sleep** করে। ঘুমন্ত অবস্থায় **Telegram bot উত্তর দেবে না** — এটা স্বাভাবিক, সমস্যা নয়।
+2. Service **wake / restart / redeploy** হলে SQLite খালি অবস্থায় শুরু হয়।
+3. Startup-এ অ্যাপ নিজে থেকেই Telegram channel-এর **pinned latest snapshot** নামায়, **checksum যাচাই** করে, এবং একটা **transaction-এর ভিতরে restore** করে।
+4. Restore সফল হলে state `ready` হয় → **তারপরই Telegram bot long-polling চালু হয়**।
+5. এরপর প্রতি ৩০ মিনিটে (configurable) অটো snapshot যায়, আর shutdown-এর আগেও একটা final snapshot নেওয়ার চেষ্টা হয়।
 
-### Paid service + persistent disk — ব্যবহারযোগ্য পছন্দ
+ফলে **কোনো chat, conversation, memory, knowledge বা trained AI model হারায় না।**
 
-SQLite স্থায়ী রাখতে paid Render web service-এ persistent disk attach করুন:
+> Restore চলাকালে chat API `503` দেয়:
+> ```json
+> { "error": "AI data is being restored", "state": "restoring" }
+> ```
+> Restore ব্যর্থ হলে **local ডেটা delete/overwrite হয় না** এবং bot বন্ধ থাকে (state: `restore_failed`)।
+
+### Free plan — Telegram backup চালু থাকলে ব্যবহারযোগ্য
+
+Free plan-এ অবশ্যই `TELEGRAM_BOT_TOKEN` ও `TELEGRAM_STORAGE_CHAT_ID` সেট করুন, নাহলে restart-এ সব ডেটা সত্যিই হারিয়ে যাবে। Telegram সেট করা থাকলে ephemeral disk আর সমস্যা নয়।
+
+মনে রাখবেন: Free instance ঘুমালে bot অফলাইন থাকে। Browser-এ app URL খুললে service আবার জেগে ওঠে (cold start কিছুটা সময় নেয়), তারপর restore হয়ে bot চালু হয়।
+
+### Paid service + persistent disk — সবচেয়ে ভালো
+
+SQLite-ও স্থায়ী রাখতে চাইলে paid Render web service-এ persistent disk attach করুন:
 
 - **Mount path:** `/var/data`
 - **Environment variable:** `DATABASE_URL=sqlite:////var/data/myai.db`
 
 > `sqlite:///./data/myai.db` হলো project-relative path। `/var/data` disk-এর জন্য চারটি slash-সহ `sqlite:////var/data/myai.db` ব্যবহার করুন।
 
-Long-polling Telegram bot সব সময় চালু রাখতে এমন paid instance দরকার যা idle হলে ঘুমায় না।
+Telegram bot সব সময় online রাখতে এমন paid instance দরকার যা idle হলে ঘুমায় না। তবে paid plan-এও Telegram backup চালু রাখা বুদ্ধিমানের কাজ।
 
 ## পদ্ধতি A: Blueprint দিয়ে সহজ ডেপ্লয়
 
@@ -68,8 +87,14 @@ Blueprint ব্যবহার না করলে:
 | `DATABASE_URL` | `sqlite:///./data/myai.db` | `sqlite:////var/data/myai.db` |
 | `TELEGRAM_BOT_TOKEN` | আপনার secret token | আপনার secret token |
 | `TELEGRAM_STORAGE_CHAT_ID` | channel ID | channel ID |
+| `TELEGRAM_AUTO_RESTORE` | `true` | `true` |
+| `TELEGRAM_RESTORE_ON_EMPTY_ONLY` | `true` | `true` |
+| `TELEGRAM_AUTO_SNAPSHOT` | `true` | `true` |
+| `TELEGRAM_SNAPSHOT_INTERVAL_MINUTES` | `30` | `30` |
 
-Token কখনো GitHub, `render.yaml`, screenshot বা chat-এ প্রকাশ করবেন না। Render-এর secret environment field-এই রাখুন।
+### 🔒 Token নিরাপত্তা — খুব গুরুত্বপূর্ণ
+
+**`TELEGRAM_BOT_TOKEN` কখনোই GitHub, কোড, `render.yaml`, screenshot বা chat-এ রাখবেন না।** Token শুধু **Render Dashboard → Environment**-এ (secret field) বসাবেন। `render.yaml`-এ token-এর জন্য `sync: false` দেওয়া আছে, অর্থাৎ value Git-এ যায় না। `.env` ফাইল `.gitignore`-এ আছে। Token ফাঁস হলে @BotFather-এ `/revoke` করে নতুন token নিন।
 
 ## Paid persistent disk সেটআপ
 
@@ -88,11 +113,13 @@ SQLite একসঙ্গে একটিমাত্র app instance-এর জ
 
 ## Telegram যাচাই
 
-1. bot-কে private channel-এর admin করুন; **Post Messages** permission দিন।
+1. bot-কে private channel-এর admin করুন; **Post Messages** ও **Pin Messages** — দুটো permission-ই দিন। (Pin permission ছাড়া restart-এর পর latest snapshot খুঁজে পাওয়া যাবে না।)
 2. Render Environment-এ token ও channel ID বসিয়ে redeploy করুন।
 3. app-এর Telegram Storage tab থেকে **Verify** চাপুন।
-4. Telegram-এ bot-কে `/start` পাঠান।
-5. Render log-এ conflict দেখলে একই token দিয়ে অন্য কোথাও bot long-polling চলছে কি না দেখুন। একই bot token-এর একাধিক polling process একসঙ্গে চালাবেন না।
+4. Telegram Storage tab থেকে **Backup Now** চেপে প্রথম snapshot নিন — এটাই আপনার প্রথম permanent ব্যাকআপ।
+5. Telegram-এ bot-কে `/start` পাঠান।
+6. UI-তে state **Ready**, **Last Backup** ও **Auto Backup** দেখাচ্ছে কি না মিলিয়ে নিন।
+7. Render log-এ conflict দেখলে একই token দিয়ে অন্য কোথাও bot long-polling চলছে কি না দেখুন। একই bot token-এর একাধিক polling process একসঙ্গে চালাবেন না।
 
 সম্পূর্ণ Telegram channel setup: [`TELEGRAM_SETUP.md`](./TELEGRAM_SETUP.md)
 
@@ -105,6 +132,7 @@ SQLite একসঙ্গে একটিমাত্র app instance-এর জ
 npm_config_nodedir=/usr/local npm install
 npx tsc --noEmit
 npm run build
+npm test
 ```
 
 - deploy ব্যর্থ হলে Render-এর **Events/Logs** দেখুন। আগের successful deploy-এ rollback করা যায়।
@@ -117,7 +145,21 @@ Dockerfile Debian image-এ `python3`, `make`, `g++` install করে native mo
 
 ### App খোলে, কিন্তু পুরোনো data নেই
 
-Free filesystem ephemeral হওয়ার কারণে restart/spin-down/redeploy-এ SQLite file হারিয়েছে। স্থায়ী সমাধান হলো paid persistent disk; Telegram snapshot recovery একটি backup পথ।
+Free filesystem ephemeral হওয়ার কারণে restart/spin-down/redeploy-এ SQLite file হারিয়েছে। Telegram configured থাকলে startup-এ **অটো restore** হওয়ার কথা। না হলে দেখুন:
+
+- Render log-এ `♻️ Restoring the latest snapshot…` এবং `✅ Restore complete` আছে কি না।
+- `TELEGRAM_AUTO_RESTORE=true` সেট আছে কি না।
+- Channel-এ আদৌ কোনো snapshot **pin** করা আছে কি না (bot-এর Pin Messages permission লাগে)।
+- `/api/v1/telegram/status`-এ `state`, `lastError` ও `latestSnapshotFileId` দেখুন।
+- সব ঠিক থাকলে UI থেকে **Restore Latest** চেপে ম্যানুয়ালি restore করুন।
+
+### State `restore_failed` দেখাচ্ছে
+
+Snapshot corrupt বা checksum mismatch হয়েছে। **আপনার local ডেটা মুছে যায়নি** এবং নিরাপত্তার জন্য bot বন্ধ রাখা হয়েছে। `/api/v1/telegram/status`-এর `lastError` দেখুন, তারপর UI-এর Snapshots লিস্ট থেকে আগের একটা ভালো snapshot বেছে **Restore** করুন।
+
+### Snapshot "skipped" বলছে
+
+ডেটা পরিবর্তন না হলে অপ্রয়োজনীয় আপলোড এড়াতে snapshot skip হয় — এটা স্বাভাবিক আচরণ। **Backup Now** বাটন সবসময় force করে, তাই সেটা চাপলে আপলোড হবেই।
 
 ### Telegram bot মাঝে মাঝে উত্তর দেয় না
 

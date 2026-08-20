@@ -60,11 +60,23 @@ export default function App() {
     fetchTelegramSnapshots();
   }, []);
 
-  const tgAction = async (action: string) => {
+  // While the app is restoring from Telegram, poll so the badge flips to Ready
+  // as soon as the restore finishes.
+  useEffect(() => {
+    if (tgStatus.state !== 'starting' && tgStatus.state !== 'restoring') return;
+    const t = setInterval(fetchTelegramStatus, 3000);
+    return () => clearInterval(t);
+  }, [tgStatus.state]);
+
+  const tgAction = async (action: string, body?: any) => {
     setTgActionStatus(`${action}...`);
     setTgResult(null);
     try {
-      const res = await fetch(`/api/v1/telegram/${action}`, { method: 'POST' });
+      const res = await fetch(`/api/v1/telegram/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
+      });
       const data = await res.json();
       if (!res.ok) {
         setTgActionStatus('');
@@ -609,20 +621,38 @@ export default function App() {
             </div>
           </div>
         );
-      case 'Telegram Storage':
+      case 'Telegram Storage': {
+        const state: string = tgStatus.state || 'starting';
+        const stateInfo: Record<string, { label: string; cls: string; dot: string }> = {
+          ready: { label: 'Ready', cls: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30', dot: 'bg-emerald-400' },
+          restoring: { label: 'Restoring…', cls: 'bg-amber-500/10 text-amber-300 border-amber-500/30', dot: 'bg-amber-400 animate-pulse' },
+          starting: { label: 'Starting…', cls: 'bg-sky-500/10 text-sky-300 border-sky-500/30', dot: 'bg-sky-400 animate-pulse' },
+          restore_failed: { label: 'Restore Failed', cls: 'bg-red-500/10 text-red-300 border-red-500/30', dot: 'bg-red-400' },
+        };
+        const si = stateInfo[state] || stateInfo.starting;
+        const fmt = (iso?: string | null) => {
+          if (!iso) return 'Never';
+          const d = new Date(iso);
+          if (isNaN(d.getTime())) return 'Never';
+          const mins = Math.round((Date.now() - d.getTime()) / 60000);
+          const rel = mins < 1 ? 'just now' : mins < 60 ? `${mins}m ago` : mins < 1440 ? `${Math.round(mins / 60)}h ago` : `${Math.round(mins / 1440)}d ago`;
+          return `${d.toLocaleString()} (${rel})`;
+        };
+        const busy = !!tgActionStatus || tgStatus.snapshotInProgress || tgStatus.restoreInProgress;
         return (
           <>
-            {/* Status card */}
-            <div className='col-span-1 md:col-span-12 bg-[#12141C] border border-slate-800/50 rounded-2xl p-6 shadow-xl'>
-              <div className='flex flex-wrap items-center justify-between gap-4'>
-                <div>
+            {/* App state + connection */}
+            <div className='col-span-1 md:col-span-12 bg-[#12141C] border border-slate-800/50 rounded-2xl p-4 md:p-6 shadow-xl'>
+              <div className='flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4'>
+                <div className='min-w-0'>
                   <div className='text-xs font-bold text-amber-400 uppercase tracking-widest mb-2'>Telegram Cloud Database</div>
-                  <div className='text-xl md:text-2xl font-light text-white'>
-                    {tgStatus.configured ? 'Connected' : 'Not configured'}
+                  <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm font-semibold ${si.cls}`}>
+                    <span className={`w-2 h-2 rounded-full ${si.dot}`} />
+                    {si.label}
                   </div>
-                  <div className='mt-2 text-xs text-slate-500 font-mono space-y-1'>
-                    <div>Bot Token: {tgStatus.botTokenSet ? '✅ set' : '❌ missing'}</div>
-                    <div>Channel ID: {tgStatus.chatIdSet ? '✅ set' : '❌ missing'}</div>
+                  <div className='mt-3 text-xs text-slate-500 font-mono space-y-1 break-words'>
+                    <div>Connection: {tgStatus.configured ? '✅ configured' : '❌ not configured'}</div>
+                    <div>Bot Token: {tgStatus.botTokenSet ? '✅ set' : '❌ missing'} · Channel ID: {tgStatus.chatIdSet ? '✅ set' : '❌ missing'}</div>
                     {tgStatus.botUsername && <div>Bot: @{tgStatus.botUsername}</div>}
                     {tgStatus.channelTitle && <div>Channel: {tgStatus.channelTitle}</div>}
                     <div>Indexed records: {tgStatus.indexedRecords ?? '...'}</div>
@@ -630,41 +660,80 @@ export default function App() {
                 </div>
                 <button
                   onClick={() => tgAction('verify')}
-                  className='px-5 py-3 bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/30 rounded-xl text-sm font-medium transition-colors'>
+                  className='w-full sm:w-auto shrink-0 px-5 py-3 bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/30 rounded-xl text-sm font-medium transition-colors'>
                   Verify Connection
                 </button>
               </div>
-              <div className='mt-4 p-4 bg-cyan-500/10 border border-cyan-500/20 rounded-xl'>
-                <div className='text-sm font-medium text-cyan-300'>📱 Chat from Telegram</div>
-                <div className='text-xs text-cyan-400/80 mt-1'>
-                  Once your bot token is set, this same bot becomes your AI assistant — just message it in Telegram
-                  (from your phone!) and your AI will reply. Try /start and /help.
+              {state === 'restore_failed' && (
+                <div className='mt-4 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-300 break-words'>
+                  ⚠️ Restore failed — your local data was NOT modified and the Telegram bot is paused.
+                  {tgStatus.lastError && <div className='mt-1 font-mono text-[10px] opacity-80'>{tgStatus.lastError}</div>}
+                </div>
+              )}
+              {state === 'restoring' && (
+                <div className='mt-4 p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-300'>
+                  ♻️ Restoring your AI data from the Telegram channel. Chat requests return 503 until this finishes.
+                </div>
+              )}
+            </div>
+
+            {/* Backup / restore summary — mobile friendly cards */}
+            <div className='col-span-1 md:col-span-12 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 md:gap-4'>
+              <div className='bg-[#12141C] border border-slate-800/50 rounded-2xl p-4'>
+                <div className='text-[10px] font-bold text-slate-500 uppercase tracking-widest'>Last Backup</div>
+                <div className='mt-2 text-sm text-white break-words'>{fmt(tgStatus.lastSnapshotAt)}</div>
+              </div>
+              <div className='bg-[#12141C] border border-slate-800/50 rounded-2xl p-4'>
+                <div className='text-[10px] font-bold text-slate-500 uppercase tracking-widest'>Last Restore</div>
+                <div className='mt-2 text-sm text-white break-words'>{fmt(tgStatus.lastRestoreAt)}</div>
+              </div>
+              <div className='bg-[#12141C] border border-slate-800/50 rounded-2xl p-4'>
+                <div className='text-[10px] font-bold text-slate-500 uppercase tracking-widest'>Auto Backup</div>
+                <div className='mt-2 text-sm text-white'>
+                  {tgStatus.autoSnapshotEnabled ? `On · every ${tgStatus.snapshotIntervalMinutes ?? 30} min` : 'Off'}
+                </div>
+                <div className='mt-1 text-[10px] text-slate-500 break-words'>Next: {fmt(tgStatus.nextSnapshotAt)}</div>
+              </div>
+              <div className='bg-[#12141C] border border-slate-800/50 rounded-2xl p-4'>
+                <div className='text-[10px] font-bold text-slate-500 uppercase tracking-widest'>Auto Restore</div>
+                <div className='mt-2 text-sm text-white'>{tgStatus.autoRestoreEnabled ? 'On at startup' : 'Off'}</div>
+                <div className='mt-1 text-[10px] text-slate-500'>
+                  {tgStatus.restoreOnEmptyOnly ? 'Only when the local DB is empty' : 'Always on startup'}
                 </div>
               </div>
             </div>
 
             {/* Actions */}
-            <div className='col-span-1 md:col-span-6 bg-[#12141C] border border-slate-800/50 rounded-2xl p-6 shadow-xl'>
+            <div className='col-span-1 md:col-span-6 bg-[#12141C] border border-slate-800/50 rounded-2xl p-4 md:p-6 shadow-xl'>
               <div className='text-xs font-bold text-white uppercase tracking-widest mb-4'>Cloud Actions</div>
               <div className='space-y-3'>
                 <button
+                  onClick={() => tgAction('snapshot', { force: true })}
+                  disabled={busy}
+                  className='w-full py-3.5 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-200 border border-indigo-500/30 rounded-xl text-sm font-bold transition-all disabled:opacity-50'>
+                  📦 Backup Now
+                </button>
+                <button
+                  onClick={() => {
+                    if (confirm('Restore the latest Telegram snapshot? This replaces the current local database.')) {
+                      tgAction('restore', { force: true });
+                    }
+                  }}
+                  disabled={busy}
+                  className='w-full py-3.5 bg-amber-600/20 hover:bg-amber-600/40 text-amber-200 border border-amber-500/30 rounded-xl text-sm font-bold transition-all disabled:opacity-50'>
+                  ♻️ Restore Latest
+                </button>
+                <button
                   onClick={() => tgAction('sync')}
-                  disabled={!!tgActionStatus}
-                  className='w-full py-3 bg-slate-800/40 hover:bg-slate-800/60 text-cyan-300 border border-cyan-500/20 rounded-xl text-sm font-bold transition-all disabled:opacity-50'>
-                  🔄 Sync All Data to Telegram
+                  disabled={busy}
+                  className='w-full py-3 bg-slate-800/40 hover:bg-slate-800/60 text-cyan-300 border border-cyan-500/20 rounded-xl text-sm font-medium transition-all disabled:opacity-50'>
+                  🔄 Mirror All Records to Telegram
                 </button>
-                <button
-                  onClick={() => tgAction('snapshot')}
-                  disabled={!!tgActionStatus}
-                  className='w-full py-3 bg-slate-800/40 hover:bg-slate-800/60 text-indigo-300 border border-indigo-500/20 rounded-xl text-sm font-bold transition-all disabled:opacity-50'>
-                  📦 Take Full Snapshot
-                </button>
-                <button
-                  onClick={() => tgAction('restore')}
-                  disabled={!!tgActionStatus}
-                  className='w-full py-3 bg-slate-800/40 hover:bg-slate-800/60 text-amber-300 border border-amber-500/20 rounded-xl text-sm font-bold transition-all disabled:opacity-50'>
-                  ♻️ Restore from Latest Snapshot
-                </button>
+                <a
+                  href='/api/v1/telegram/snapshot/download'
+                  className='block w-full py-3 text-center bg-slate-800/40 hover:bg-slate-800/60 text-slate-300 border border-slate-700/50 rounded-xl text-sm font-medium transition-all'>
+                  ⬇️ Download Snapshot (JSON)
+                </a>
               </div>
               {tgActionStatus && (
                 <div className='mt-4 text-center text-xs text-slate-400 p-2 bg-slate-800/20 rounded-lg'>{tgActionStatus}</div>
@@ -672,31 +741,66 @@ export default function App() {
               {tgResult && (
                 <div className={`mt-4 text-xs p-3 rounded-lg break-words ${tgResult.ok ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' : 'bg-red-500/10 text-red-300 border border-red-500/20'}`}>
                   {tgResult.message}
+                  {tgResult.data?.checksum && (
+                    <div className='mt-2 font-mono text-[10px] text-slate-400 break-all'>checksum: {tgResult.data.checksum}</div>
+                  )}
                   {tgResult.data?.fileId && (
-                    <div className='mt-2 font-mono text-[10px] text-slate-400'>fileId: {tgResult.data.fileId}</div>
+                    <div className='mt-1 font-mono text-[10px] text-slate-400 break-all'>fileId: {tgResult.data.fileId}</div>
                   )}
                 </div>
               )}
             </div>
 
-            {/* Snapshots */}
-            <div className='col-span-1 md:col-span-6 bg-[#12141C] border border-slate-800/50 rounded-2xl p-6 shadow-xl'>
-              <div className='text-xs font-bold text-white uppercase tracking-widest mb-4'>Snapshots</div>
-              {tgSnapshots.length === 0 ? (
-                <div className='text-xs text-slate-500 text-center p-6'>No snapshots yet. Take one with the button on the left.</div>
+            {/* Stored data + snapshots */}
+            <div className='col-span-1 md:col-span-6 bg-[#12141C] border border-slate-800/50 rounded-2xl p-4 md:p-6 shadow-xl'>
+              <div className='text-xs font-bold text-white uppercase tracking-widest mb-4'>Backed-up Tables</div>
+              {tgStatus.tableCounts ? (
+                <div className='grid grid-cols-2 gap-2 mb-5'>
+                  {Object.entries(tgStatus.tableCounts as Record<string, number>).map(([t, n]) => (
+                    <div key={t} className='px-3 py-2 bg-slate-800/20 rounded-lg border border-slate-800/50'>
+                      <div className='text-[10px] text-slate-500 font-mono truncate'>{t}</div>
+                      <div className='text-sm text-white font-semibold'>{n}</div>
+                    </div>
+                  ))}
+                </div>
               ) : (
-                <div className='space-y-2 max-h-64 overflow-y-auto'>
+                <div className='text-xs text-slate-500 mb-5'>Loading…</div>
+              )}
+              <div className='text-xs font-bold text-white uppercase tracking-widest mb-3'>Snapshots</div>
+              {tgSnapshots.length === 0 ? (
+                <div className='text-xs text-slate-500 text-center p-4'>No snapshots yet. Press “Backup Now”.</div>
+              ) : (
+                <div className='space-y-2 max-h-56 overflow-y-auto'>
                   {tgSnapshots.map((s: any) => (
                     <div key={s.id} className='p-3 bg-slate-800/20 rounded-lg border border-slate-800/50'>
-                      <div className='text-xs text-slate-300 font-mono truncate'>fileId: {s.telegram_file_id}</div>
-                      <div className='mt-1 text-[10px] text-slate-500'>message_id: {s.telegram_message_id} · {s.created_at}</div>
+                      <div className='text-[10px] text-slate-300 font-mono break-all'>{s.telegram_file_id}</div>
+                      <div className='mt-1 flex items-center justify-between gap-2'>
+                        <span className='text-[10px] text-slate-500'>msg {s.telegram_message_id} · {s.created_at}</span>
+                        <button
+                          onClick={() => tgAction('restore', { fileId: s.telegram_file_id, force: true })}
+                          disabled={busy}
+                          className='shrink-0 px-2 py-1 text-[10px] bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 border border-amber-500/30 rounded-md disabled:opacity-50'>
+                          Restore
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
               )}
             </div>
+
+            {/* How it works */}
+            <div className='col-span-1 md:col-span-12 p-4 bg-cyan-500/10 border border-cyan-500/20 rounded-2xl'>
+              <div className='text-sm font-medium text-cyan-300'>📱 How your data stays safe</div>
+              <div className='text-xs text-cyan-400/80 mt-2 space-y-1'>
+                <div>• The Telegram private channel is the <b>permanent database</b> — Render's SQLite disk is only a temporary cache.</div>
+                <div>• After every restart, redeploy or wake-from-sleep, the latest snapshot is restored automatically before the bot starts.</div>
+                <div>• The same bot is also your AI assistant — message it in Telegram and your AI replies.</div>
+              </div>
+            </div>
           </>
         );
+      }
       case 'AI Brain':
         return (
           <>

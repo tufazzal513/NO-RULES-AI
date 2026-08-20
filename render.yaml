@@ -19,3 +19,13 @@ services:
         sync: false
       - key: TELEGRAM_STORAGE_CHAT_ID
         sync: false
+      # Telegram private channel = permanent backup / source of truth.
+      # These are safe to keep in Git (no secrets).
+      - key: TELEGRAM_AUTO_RESTORE
+        value: "true"
+      - key: TELEGRAM_RESTORE_ON_EMPTY_ONLY
+        value: "true"
+      - key: TELEGRAM_AUTO_SNAPSHOT
+        value: "true"
+      - key: TELEGRAM_SNAPSHOT_INTERVAL_MINUTES
+        value: "30"
