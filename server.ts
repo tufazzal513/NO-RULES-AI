@@ -5,6 +5,7 @@ import Database from "better-sqlite3";
 import fs from "fs";
 import cors from "cors";
 import { TelegramStorage } from "./server/telegram.ts";
+import { TelegramBot, type TelegramMessage } from "./server/telegram-bot.ts";
 import { AIEngine } from "./server/ai/engine.ts";
 
 // Initialize express app
@@ -50,6 +51,7 @@ try {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER,
       title TEXT,
+      telegram_chat_id TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS chat_messages (
@@ -86,6 +88,15 @@ try {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // Lightweight migrations for databases created before a column existed.
+  const ensureColumn = (table: string, column: string, ddl: string) => {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === column)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    }
+  };
+  ensureColumn("conversations", "telegram_chat_id", "telegram_chat_id TEXT");
 } catch (err) {
   console.error("Error opening database:", err);
 }
@@ -98,6 +109,66 @@ const telegram = new TelegramStorage({
 
 // Initialize the local AI brain (offline — no external AI service)
 const ai = new AIEngine(db);
+
+// ---------------------------------------------------------------------------
+// Telegram bot — chat with your AI directly from Telegram (long-polling)
+// ---------------------------------------------------------------------------
+
+/** Route one incoming Telegram text message through the AI and persist it. */
+async function handleTelegramMessage(msg: TelegramMessage): Promise<string> {
+  const text = (msg.text || "").trim();
+  const chatId = msg.chat.id;
+  const name = msg.chat.first_name || msg.from?.first_name || msg.chat.username || "friend";
+  const lower = text.toLowerCase();
+
+  if (lower === "/start") {
+    return (
+      `Hi ${name}! 👋 I'm MY-AI — your own personal AI.\n\n` +
+      "• Just type a message and I'll reply.\n" +
+      "• I remember facts about you (try: \"My name is …\").\n" +
+      "• I answer from your knowledge documents.\n" +
+      "• Everything is stored in your Telegram cloud database.\n\n" +
+      "Type /help for more."
+    );
+  }
+  if (lower === "/help" || lower === "/commands") {
+    return (
+      "Here's what I can do:\n\n" +
+      "💬 Chat with me normally — I'll answer.\n" +
+      "🧠 Memory: \"My name is …\", \"I like …\", \"remember that …\"\n" +
+      "📚 Ask about your documents (added in the AI Brain tab)\n" +
+      "➗ Math: just type \"12 * 8 + 4\"\n" +
+      "\nCommands:\n/start — welcome\n/help — this help"
+    );
+  }
+
+  // Find (or create) the conversation for this Telegram user.
+  let conv = db.prepare("SELECT id FROM conversations WHERE telegram_chat_id = ?").get(String(chatId)) as any;
+  if (!conv) {
+    const info = db.prepare("INSERT INTO conversations (title, telegram_chat_id) VALUES (?, ?)").run(`TG: ${name}`, String(chatId));
+    conv = { id: Number(info.lastInsertRowid) };
+    tryMirror("conversations", conv.id, { id: conv.id, title: `TG: ${name}`, telegram_chat_id: String(chatId) });
+  }
+  const sid = conv.id;
+
+  // Persist the user's message.
+  const um = db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'user', ?)").run(sid, text);
+  tryMirror("chat_messages", um.lastInsertRowid, { id: um.lastInsertRowid, session_id: sid, role: "user", content: text, source: "telegram" });
+
+  // Get the AI's reply.
+  const result = ai.reply(text);
+
+  // Persist the AI's reply.
+  const am = db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'ai', ?)").run(sid, result.reply);
+  tryMirror("chat_messages", am.lastInsertRowid, { id: am.lastInsertRowid, session_id: sid, role: "ai", content: result.reply, source: "telegram" });
+
+  return result.reply;
+}
+
+let telegramBot: TelegramBot | null = null;
+if (process.env.TELEGRAM_BOT_TOKEN) {
+  telegramBot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, handleTelegramMessage);
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -165,6 +236,8 @@ app.get("/api/v1/health/detailed", (req, res) => {
     const convRow = db.prepare("SELECT COUNT(*) as count FROM conversations").get() as any;
     const msgRow = db.prepare("SELECT COUNT(*) as count FROM chat_messages").get() as any;
     const tgRow = db.prepare("SELECT COUNT(*) as count FROM telegram_index").get() as any;
+    const knowRow = db.prepare("SELECT COUNT(*) as count FROM knowledge").get() as any;
+    const memRow = db.prepare("SELECT COUNT(*) as count FROM memory").get() as any;
 
     res.json({
       status: "Operational",
@@ -172,13 +245,14 @@ app.get("/api/v1/health/detailed", (req, res) => {
       database: "SQLite (myai.db)",
       model: "BasicEngine",
       telegram: telegram.configured ? "Configured" : "Not configured",
+      telegramBot: telegramBot ? "Running" : "Not configured",
       stats: {
         totalUsers: userRow ? userRow.count : 0,
         totalConversations: convRow ? convRow.count : 0,
         totalMessages: msgRow ? msgRow.count : 0,
         telegramRecords: tgRow ? tgRow.count : 0,
-        knowledgeDocs: 0,
-        datasetCount: 0,
+        knowledgeDocs: knowRow ? knowRow.count : 0,
+        datasetCount: memRow ? memRow.count : 0,
       },
     });
   } catch (err: any) {
@@ -544,9 +618,14 @@ async function startServer() {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 
-  // Handle graceful shutdown
-  process.on("SIGTERM", () => {
-    console.log("SIGTERM signal received: closing HTTP server");
+  // Start the Telegram bot (if configured) — lets you chat with your AI from
+  // your phone's Telegram app. Long-polling, so no public webhook URL needed.
+  if (telegramBot) {
+    telegramBot.start().catch((err) => console.error("Failed to start Telegram bot:", err.message));
+  }
+
+  const shutdown = () => {
+    telegramBot?.stop();
     server.close(() => {
       console.log("HTTP server closed");
       if (db) {
@@ -554,17 +633,17 @@ async function startServer() {
       }
       process.exit(0);
     });
+  };
+
+  // Handle graceful shutdown
+  process.on("SIGTERM", () => {
+    console.log("SIGTERM signal received: closing HTTP server");
+    shutdown();
   });
 
   process.on("SIGINT", () => {
     console.log("SIGINT signal received: closing HTTP server");
-    server.close(() => {
-      console.log("HTTP server closed");
-      if (db) {
-        db.close();
-      }
-      process.exit(0);
-    });
+    shutdown();
   });
 }
 

@@ -14,6 +14,9 @@ A self-hosted General AI platform with a built-in REST API and web-based control
 - **Telegram Cloud Database** — a free, unlimited cloud store built on a Telegram
   bot + private channel. Every record is mirrored to the channel; full JSON
   snapshots can be restored any time. See [`TELEGRAM_SETUP.md`](./TELEGRAM_SETUP.md).
+- **Chat from Telegram 📱** — the same bot doubles as your AI assistant: message
+  it in Telegram (from your phone) and your AI replies. Long-polling, no webhook
+  needed.
 - **Train your own model** — LoRA fine-tuning pipeline for a fully personal AI.
   See [`training/README.md`](./training/README.md).
 - Render Deployment Ready

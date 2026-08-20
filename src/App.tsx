@@ -494,6 +494,27 @@ export default function App() {
 
             {/* Main Chat Area */}
             <div className='flex-1 flex flex-col min-w-0'>
+              {/* Mobile session selector (sidebar is hidden on small screens) */}
+              {chatSessions.length > 0 && (
+                <div className='md:hidden px-3 pt-3 flex gap-2 overflow-x-auto pb-1 shrink-0'>
+                  <button
+                    onClick={() => { setActiveSessionId(null); setMessages([{ role: 'ai', content: "Hello! 👋 I'm your personal AI — fully yours and offline." }]); }}
+                    className={`px-3 py-1.5 rounded-full text-xs whitespace-nowrap border ${activeSessionId === null ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30' : 'bg-slate-800/40 text-slate-400 border-slate-700/50'}`}
+                  >
+                    + New
+                  </button>
+                  {chatSessions.map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => setActiveSessionId(s.id)}
+                      className={`px-3 py-1.5 rounded-full text-xs whitespace-nowrap border ${activeSessionId === s.id ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30' : 'bg-slate-800/40 text-slate-400 border-slate-700/50'}`}
+                    >
+                      {s.title}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {/* Chat Messages Area */}
               <div className='flex-1 overflow-y-auto p-4 md:p-8 space-y-6'>
                 {messages.map((msg, idx) => (
@@ -612,6 +633,13 @@ export default function App() {
                   className='px-5 py-3 bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/30 rounded-xl text-sm font-medium transition-colors'>
                   Verify Connection
                 </button>
+              </div>
+              <div className='mt-4 p-4 bg-cyan-500/10 border border-cyan-500/20 rounded-xl'>
+                <div className='text-sm font-medium text-cyan-300'>📱 Chat from Telegram</div>
+                <div className='text-xs text-cyan-400/80 mt-1'>
+                  Once your bot token is set, this same bot becomes your AI assistant — just message it in Telegram
+                  (from your phone!) and your AI will reply. Try /start and /help.
+                </div>
               </div>
             </div>
 
