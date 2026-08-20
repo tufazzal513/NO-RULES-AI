@@ -8,6 +8,9 @@ A self-hosted General AI platform with a built-in REST API and web-based control
 - Admin Control Panel (Web Dashboard)
 - Extensible Model Interface
 - Database Support (SQLite / PostgreSQL)
+- **Telegram Cloud Database** — a free, unlimited cloud store built on a Telegram
+  bot + private channel. Every record is mirrored to the channel; full JSON
+  snapshots can be restored any time. See [`TELEGRAM_SETUP.md`](./TELEGRAM_SETUP.md).
 - Render Deployment Ready
 
 ## Deployment on Render

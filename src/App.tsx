@@ -24,6 +24,63 @@ export default function App() {
   });
   const [backupStatus, setBackupStatus] = useState('');
 
+  // Telegram Storage states
+  const [tgStatus, setTgStatus] = useState<any>({
+    configured: false,
+    botTokenSet: false,
+    chatIdSet: false,
+    indexedRecords: 0
+  });
+  const [tgActionStatus, setTgActionStatus] = useState('');
+  const [tgResult, setTgResult] = useState<any>(null);
+  const [tgSnapshots, setTgSnapshots] = useState<any[]>([]);
+
+  const fetchTelegramStatus = async () => {
+    try {
+      const res = await fetch('/api/v1/telegram/status');
+      const data = await res.json();
+      setTgStatus(data);
+    } catch (e) {
+      console.error('Failed to fetch Telegram status:', e);
+    }
+  };
+
+  const fetchTelegramSnapshots = async () => {
+    try {
+      const res = await fetch('/api/v1/telegram/snapshots');
+      const data = await res.json();
+      setTgSnapshots(data.snapshots || []);
+    } catch (e) {
+      console.error('Failed to fetch Telegram snapshots:', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchTelegramStatus();
+    fetchTelegramSnapshots();
+  }, []);
+
+  const tgAction = async (action: string) => {
+    setTgActionStatus(`${action}...`);
+    setTgResult(null);
+    try {
+      const res = await fetch(`/api/v1/telegram/${action}`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        setTgActionStatus('');
+        setTgResult({ ok: false, message: data.error || data.message || 'Request failed' });
+      } else {
+        setTgActionStatus('');
+        setTgResult({ ok: true, message: data.message || 'Done', data });
+        fetchTelegramStatus();
+        fetchTelegramSnapshots();
+      }
+    } catch (e: any) {
+      setTgActionStatus('');
+      setTgResult({ ok: false, message: e.message });
+    }
+  };
+
   // AI Chat States
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
   const [chatSessions, setChatSessions] = useState<{id: number, title: string, created_at: string}[]>([]);
@@ -406,6 +463,87 @@ export default function App() {
             </div>
             </div>
           </div>
+        );
+      case 'Telegram Storage':
+        return (
+          <>
+            {/* Status card */}
+            <div className='col-span-1 md:col-span-12 bg-[#12141C] border border-slate-800/50 rounded-2xl p-6 shadow-xl'>
+              <div className='flex flex-wrap items-center justify-between gap-4'>
+                <div>
+                  <div className='text-xs font-bold text-amber-400 uppercase tracking-widest mb-2'>Telegram Cloud Database</div>
+                  <div className='text-xl md:text-2xl font-light text-white'>
+                    {tgStatus.configured ? 'Connected' : 'Not configured'}
+                  </div>
+                  <div className='mt-2 text-xs text-slate-500 font-mono space-y-1'>
+                    <div>Bot Token: {tgStatus.botTokenSet ? '✅ set' : '❌ missing'}</div>
+                    <div>Channel ID: {tgStatus.chatIdSet ? '✅ set' : '❌ missing'}</div>
+                    {tgStatus.botUsername && <div>Bot: @{tgStatus.botUsername}</div>}
+                    {tgStatus.channelTitle && <div>Channel: {tgStatus.channelTitle}</div>}
+                    <div>Indexed records: {tgStatus.indexedRecords ?? '...'}</div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => tgAction('verify')}
+                  className='px-5 py-3 bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/30 rounded-xl text-sm font-medium transition-colors'>
+                  Verify Connection
+                </button>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className='col-span-1 md:col-span-6 bg-[#12141C] border border-slate-800/50 rounded-2xl p-6 shadow-xl'>
+              <div className='text-xs font-bold text-white uppercase tracking-widest mb-4'>Cloud Actions</div>
+              <div className='space-y-3'>
+                <button
+                  onClick={() => tgAction('sync')}
+                  disabled={!!tgActionStatus}
+                  className='w-full py-3 bg-slate-800/40 hover:bg-slate-800/60 text-cyan-300 border border-cyan-500/20 rounded-xl text-sm font-bold transition-all disabled:opacity-50'>
+                  🔄 Sync All Data to Telegram
+                </button>
+                <button
+                  onClick={() => tgAction('snapshot')}
+                  disabled={!!tgActionStatus}
+                  className='w-full py-3 bg-slate-800/40 hover:bg-slate-800/60 text-indigo-300 border border-indigo-500/20 rounded-xl text-sm font-bold transition-all disabled:opacity-50'>
+                  📦 Take Full Snapshot
+                </button>
+                <button
+                  onClick={() => tgAction('restore')}
+                  disabled={!!tgActionStatus}
+                  className='w-full py-3 bg-slate-800/40 hover:bg-slate-800/60 text-amber-300 border border-amber-500/20 rounded-xl text-sm font-bold transition-all disabled:opacity-50'>
+                  ♻️ Restore from Latest Snapshot
+                </button>
+              </div>
+              {tgActionStatus && (
+                <div className='mt-4 text-center text-xs text-slate-400 p-2 bg-slate-800/20 rounded-lg'>{tgActionStatus}</div>
+              )}
+              {tgResult && (
+                <div className={`mt-4 text-xs p-3 rounded-lg break-words ${tgResult.ok ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' : 'bg-red-500/10 text-red-300 border border-red-500/20'}`}>
+                  {tgResult.message}
+                  {tgResult.data?.fileId && (
+                    <div className='mt-2 font-mono text-[10px] text-slate-400'>fileId: {tgResult.data.fileId}</div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Snapshots */}
+            <div className='col-span-1 md:col-span-6 bg-[#12141C] border border-slate-800/50 rounded-2xl p-6 shadow-xl'>
+              <div className='text-xs font-bold text-white uppercase tracking-widest mb-4'>Snapshots</div>
+              {tgSnapshots.length === 0 ? (
+                <div className='text-xs text-slate-500 text-center p-6'>No snapshots yet. Take one with the button on the left.</div>
+              ) : (
+                <div className='space-y-2 max-h-64 overflow-y-auto'>
+                  {tgSnapshots.map((s: any) => (
+                    <div key={s.id} className='p-3 bg-slate-800/20 rounded-lg border border-slate-800/50'>
+                      <div className='text-xs text-slate-300 font-mono truncate'>fileId: {s.telegram_file_id}</div>
+                      <div className='mt-1 text-[10px] text-slate-500'>message_id: {s.telegram_message_id} · {s.created_at}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
         );
       default:
         return (
