@@ -11,7 +11,9 @@ export interface KnowledgeDoc {
 }
 
 function tokenizeLower(text: string): string[] {
-  return text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  // \p{M} keeps Bengali vowel signs attached to their letters, so "কেন"
+  // tokenises as one word instead of splitting into "ক" + "ন".
+  return text.toLowerCase().match(/[\p{L}\p{N}\p{M}]+/gu) ?? [];
 }
 
 /** Common words that carry little meaning for retrieval. */

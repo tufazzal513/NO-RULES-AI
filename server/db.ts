@@ -21,6 +21,7 @@ export const SNAPSHOT_TABLES = [
   "knowledge",
   "memory",
   "ai_model",
+  "research_cache",
   "telegram_index",
 ] as const;
 
@@ -85,6 +86,16 @@ export const SCHEMA_SQL = `
     key TEXT PRIMARY KEY,
     value TEXT,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  -- Permanent cache for online research answers. Lives in the Telegram
+  -- snapshot too, so findings survive Render restarts and can be answered
+  -- again even with no internet at all.
+  CREATE TABLE IF NOT EXISTS research_cache (
+    key TEXT PRIMARY KEY,
+    topic TEXT,
+    result TEXT,
+    source TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
   -- Local-only bookkeeping (never part of a snapshot): remembers the last
   -- snapshot/restore checksums so we can skip no-op snapshots and refuse to

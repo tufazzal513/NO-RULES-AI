@@ -140,6 +140,7 @@ export function detectIntent(input: string): string | null {
       "• Answer from your knowledge documents 📚\n" +
       "• Remember facts about you 🧠\n" +
       "• Solve math ➗\n" +
+      "• Research current questions online — free, no API key 🔎\n" +
       "• Generate text in your own style ✍️\n" +
       "• Keep everything in your Telegram cloud database ☁️\n\n" +
       "Add documents in the 'AI Brain' tab, then ask me about them."

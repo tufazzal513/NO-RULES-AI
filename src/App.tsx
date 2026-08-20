@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { Menu, X, Activity, Database, BrainCircuit, MessageSquare, DatabaseBackup, Users, Settings, Send, Sparkles, Paperclip, Mic, Volume2, Trash2, Download, Play } from 'lucide-react';
+import { Menu, X, Activity, Database, BrainCircuit, MessageSquare, DatabaseBackup, Users, Settings, Send, Sparkles, Paperclip, Mic, Volume2, Trash2, Download, Play, Search, Globe, RefreshCw, WifiOff } from 'lucide-react';
 
 export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -58,6 +58,7 @@ export default function App() {
   useEffect(() => {
     fetchTelegramStatus();
     fetchTelegramSnapshots();
+    fetchResearchStatus();
   }, []);
 
   // While the app is restoring from Telegram, poll so the badge flips to Ready
@@ -102,6 +103,67 @@ export default function App() {
   const [memKey, setMemKey] = useState('');
   const [memValue, setMemValue] = useState('');
   const [brainMsg, setBrainMsg] = useState('');
+
+  // Research states — keyless online research (sources, cache, cooldowns)
+  const [researchStatus, setResearchStatus] = useState<any>(null);
+  const [researchTopic, setResearchTopic] = useState('');
+  const [researchResult, setResearchResult] = useState<any>(null);
+  const [researchBusy, setResearchBusy] = useState(false);
+  const [researchMsg, setResearchMsg] = useState('');
+
+  const fetchResearchStatus = async () => {
+    try {
+      const res = await fetch('/api/v1/research/status');
+      const data = await res.json();
+      setResearchStatus(data);
+    } catch (e) {
+      console.error('Failed to fetch research status:', e);
+    }
+  };
+
+  const runResearch = async () => {
+    const topic = researchTopic.trim();
+    if (!topic || researchBusy) return;
+    setResearchBusy(true);
+    setResearchMsg('Searching…');
+    setResearchResult(null);
+    try {
+      const res = await fetch('/api/v1/research', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setResearchResult({ ok: false, message: data.error || 'Research failed' });
+      } else {
+        setResearchResult({ ok: true, data });
+      }
+      fetchResearchStatus();
+    } catch (e: any) {
+      setResearchResult({ ok: false, message: e.message });
+    } finally {
+      setResearchBusy(false);
+      setResearchMsg('');
+    }
+  };
+
+  const resetResearch = async (clearCache: boolean) => {
+    setResearchMsg('Resetting…');
+    try {
+      const res = await fetch('/api/v1/research/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clearCache }),
+      });
+      const data = await res.json();
+      setResearchMsg(data.message || 'Done');
+      fetchResearchStatus();
+      setTimeout(() => setResearchMsg(''), 5000);
+    } catch (e: any) {
+      setResearchMsg(e.message);
+    }
+  };
 
   const fetchBrain = async () => {
     try {
@@ -208,6 +270,7 @@ export default function App() {
     intent: { icon: '⚙️', label: 'Intent' },
     memory: { icon: '🧠', label: 'Memory' },
     knowledge: { icon: '📚', label: 'Knowledge' },
+    research: { icon: '🔎', label: 'Research' },
     generate: { icon: '✍️', label: 'My Model' },
     fallback: { icon: '✨', label: 'Assistant' },
   };
@@ -375,6 +438,7 @@ export default function App() {
     { name: 'Dashboard', icon: <Activity size={18} /> },
     { name: 'AI Chat', icon: <MessageSquare size={18} /> },
     { name: 'AI Brain', icon: <BrainCircuit size={18} /> },
+    { name: 'Research', icon: <Globe size={18} /> },
     { name: 'Datasets', icon: <Database size={18} /> },
     { name: 'Telegram Storage', icon: <DatabaseBackup size={18} /> },
     { name: 'Users', icon: <Users size={18} /> },
@@ -903,6 +967,110 @@ export default function App() {
             </div>
           </>
         );
+      case 'Research': {
+        const sources = (researchStatus?.sources ?? []) as any[];
+        const readyCount = sources.filter((s: any) => s.ready).length;
+        const cache = researchStatus?.cache ?? {};
+        const fmtCooldown = (ms: number) =>
+          ms >= 120000 ? `${Math.ceil(ms / 60000)}m` : `${Math.ceil(ms / 1000)}s`;
+        return (
+          <>
+            <div className='col-span-1 md:col-span-4 bg-[#12141C] border border-slate-800/50 rounded-2xl p-5 md:p-6 shadow-xl'>
+              <div className='text-xs font-bold text-emerald-400 uppercase tracking-widest mb-4'>Sources Ready</div>
+              <div className='text-3xl font-light text-white mb-2'>{sources.length ? `${readyCount}/${sources.length}` : '…'}</div>
+              <div className='text-xs text-slate-500'>Keyless public sources — no API key, no signup</div>
+            </div>
+
+            <div className='col-span-1 md:col-span-4 bg-[#12141C] border border-slate-800/50 rounded-2xl p-5 md:p-6 shadow-xl'>
+              <div className='text-xs font-bold text-cyan-400 uppercase tracking-widest mb-4'>Permanent Cache</div>
+              <div className='text-3xl font-light text-white mb-2'>{cache.entries ?? '…'}</div>
+              <div className='text-xs text-slate-500'>hits {cache.hits ?? 0} · misses {cache.misses ?? 0} · stale {cache.staleServed ?? 0}</div>
+            </div>
+
+            <div className='col-span-1 md:col-span-4 bg-[#12141C] border border-slate-800/50 rounded-2xl p-5 md:p-6 shadow-xl'>
+              <div className='text-xs font-bold text-indigo-400 uppercase tracking-widest mb-4'>Saved Findings</div>
+              <div className='text-3xl font-light text-white mb-2'>{researchStatus?.savedFindings ?? '…'}</div>
+              <div className='text-xs text-slate-500'>knowledge docs — survive restarts via Telegram snapshot</div>
+            </div>
+
+            <div className='col-span-1 md:col-span-7 bg-[#12141C] border border-slate-800/50 rounded-2xl p-5 md:p-6 shadow-xl'>
+              <div className='flex items-center justify-between mb-4'>
+                <div className='text-xs font-bold text-slate-400 uppercase tracking-widest'>Sources &amp; Cooldowns</div>
+                <button
+                  onClick={() => resetResearch(false)}
+                  className='px-3 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/30 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5'
+                >
+                  <RefreshCw size={12} /> Reset Cooldowns
+                </button>
+              </div>
+              <div className='space-y-2 max-h-[420px] overflow-y-auto pr-1'>
+                {sources.length === 0 && <div className='text-sm text-slate-500 p-4 text-center'>Loading source status…</div>}
+                {sources.map((s: any) => (
+                  <div key={`${s.name}-${s.host}`} className='flex items-center justify-between p-3 bg-slate-800/20 rounded-xl border border-slate-800/50'>
+                    <div className='min-w-0'>
+                      <div className='text-sm text-slate-200 truncate'>{s.name}</div>
+                      <div className='text-[11px] text-slate-500 font-mono truncate'>{s.host}</div>
+                    </div>
+                    {s.ready ? (
+                      <span className='shrink-0 ml-3 inline-flex items-center gap-1 text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full'>● Ready</span>
+                    ) : (
+                      <span
+                        className='shrink-0 ml-3 inline-flex items-center gap-1 text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full'
+                        title={`${s.failures} failure(s)`}
+                      >
+                        <WifiOff size={11} /> {fmtCooldown(s.cooldownRemainingMs)}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className='col-span-1 md:col-span-5 bg-[#12141C] border border-slate-800/50 rounded-2xl p-5 md:p-6 shadow-xl flex flex-col'>
+              <div className='text-xs font-bold text-white uppercase tracking-widest mb-4'>Try a Topic</div>
+              <div className='flex gap-2 mb-3'>
+                <input
+                  value={researchTopic}
+                  onChange={(e) => setResearchTopic(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && runResearch()}
+                  placeholder='e.g. latest Bangladesh cricket news'
+                  className='flex-1 bg-slate-800/40 border border-slate-700/50 rounded-xl px-3 py-2.5 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500/50 min-w-0'
+                />
+                <button
+                  onClick={runResearch}
+                  disabled={researchBusy}
+                  className='px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-sm font-medium transition-colors flex items-center gap-1.5 shrink-0'
+                >
+                  {researchBusy ? '…' : (<><Search size={14} /> Search</>)}
+                </button>
+              </div>
+              <div className='text-xs text-slate-500 mb-3'>
+                In chat, question-like messages are researched automatically — or type /research &lt;topic&gt;. Bengali questions (কে, কী, কেন, সর্বশেষ, খবর…) work too.
+              </div>
+              {researchMsg && (
+                <div className='text-xs text-indigo-300 p-2.5 bg-indigo-500/10 border border-indigo-500/20 rounded-lg mb-3'>{researchMsg}</div>
+              )}
+              {researchResult && (
+                <div className='p-3.5 bg-slate-800/20 rounded-xl border border-slate-800/50 text-sm leading-relaxed text-slate-300 overflow-y-auto max-h-[320px] whitespace-pre-wrap'>
+                  {researchResult.ok ? researchResult.data?.finding?.answer : researchResult.message}
+                </div>
+              )}
+              {!researchResult && (
+                <div className='flex-1 flex flex-col justify-center items-center text-center text-slate-600 py-10'>
+                  <Globe size={28} className='mb-3 opacity-50' />
+                  <div className='text-xs'>7 keyless sources · per-host circuit breakers · permanent cache</div>
+                </div>
+              )}
+              <button
+                onClick={() => resetResearch(true)}
+                className='w-full py-2.5 mt-4 bg-slate-800/40 hover:bg-slate-800/60 text-slate-400 border border-slate-700/50 rounded-xl text-xs font-medium transition-colors'
+              >
+                Clear Research Cache
+              </button>
+            </div>
+          </>
+        );
+      }
       default:
         return (
           <div className='col-span-1 md:col-span-12 bg-[#12141C] border border-slate-800/50 rounded-2xl p-10 shadow-xl flex flex-col items-center justify-center text-center min-h-[400px]'>

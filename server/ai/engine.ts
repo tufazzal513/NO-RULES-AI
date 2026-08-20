@@ -15,8 +15,15 @@
 import { MarkovModel } from "./markov.ts";
 import { BM25, meaningfulTerms, type KnowledgeDoc } from "./retrieval.ts";
 import { detectIntent, tryEvaluateMath } from "./intents.ts";
+import {
+  ResearchService,
+  forcedResearchTopic,
+  formatFinding,
+  isResearchQuestion,
+  type ResearchResult,
+} from "../research/research.ts";
 
-export type AIMode = "intent" | "memory" | "knowledge" | "generate" | "fallback";
+export type AIMode = "intent" | "memory" | "knowledge" | "research" | "generate" | "fallback";
 
 export interface ChatResult {
   reply: string;
@@ -42,16 +49,23 @@ export class AIEngine {
   private db: any;
   private markov = new MarkovModel();
   private hooks: AIEngineHooks;
+  private research: ResearchService | null = null;
 
-  constructor(db: any, hooks: AIEngineHooks = {}) {
+  constructor(db: any, hooks: AIEngineHooks = {}, research: ResearchService | null = null) {
     this.db = db;
     this.hooks = hooks;
+    this.research = research;
     this.load();
   }
 
   /** Attach/replace the mirror hooks after construction. */
   setHooks(hooks: AIEngineHooks): void {
     this.hooks = { ...this.hooks, ...hooks };
+  }
+
+  /** Attach the online research service (optional — brain still works without it). */
+  setResearch(research: ResearchService | null): void {
+    this.research = research;
   }
 
   /** Reload the persisted model — used right after a Telegram restore. */
@@ -199,13 +213,75 @@ export class AIEngine {
 
     return {
       reply:
-        "I'm your offline personal AI and I'm still learning. ✨\n\n" +
+        "I'm your personal AI and I'm still learning. ✨\n\n" +
         "• Chat more, then press Train in the AI Brain tab so I learn your language.\n" +
         "• Add documents in AI Brain → Knowledge and I'll answer from them.\n" +
-        "• Tell me facts (like \"My name is …\") and I'll remember them.\n\n" +
+        "• Tell me facts (like \"My name is …\") and I'll remember them.\n" +
+        "• Ask me a current question — I can research it online, keyless and free.\n" +
+        "  (Type /research <topic> to force an online lookup.)\n\n" +
         "Everything stays on your own machine and your Telegram cloud database.",
       mode: "fallback",
     };
+  }
+
+  private researchFailReply(res: ResearchResult, topic: string): string {
+    if (res.offline) {
+      return (
+        "⚠️ I couldn't reach the internet for research right now. I can still answer " +
+        "from your own documents and memory — or just ask me again in a moment."
+      );
+    }
+    return `🤷 I searched online for "${topic}" but couldn't find a good answer yet. Try rephrasing, or use /research <topic> to force another lookup.`;
+  }
+
+  /**
+   * Async reply used by the chat API and the Telegram bot.
+   *
+   * Decision order (brain FIRST, internet LAST):
+   *   math → intent → memory → knowledge → (/research | question-like) → markov → fallback
+   * Online research only runs when the local brain has nothing — and it is
+   * bounded by a hard time budget, so an offline machine never hangs a chat.
+   */
+  async replyAsync(input: string): Promise<ChatResult> {
+    const math = tryEvaluateMath(input);
+    if (math !== null) return { reply: `The result is ${math}.`, mode: "intent" };
+
+    const intent = detectIntent(input);
+    if (intent) return { reply: intent, mode: "intent" };
+
+    const mem = this.handleMemory(input);
+    if (mem) return { reply: mem, mode: "memory" };
+
+    const know = this.retrieve(input);
+    if (know) return know;
+
+    // `/research <topic>` — force an online lookup even for non-question text.
+    const forced = forcedResearchTopic(input);
+    if (forced) {
+      if (!this.research || !this.research.enabled) {
+        return {
+          reply: "⚠️ Online research is disabled (RESEARCH_ENABLED=false). I can still answer from your own documents, memory and math.",
+          mode: "fallback",
+        };
+      }
+      const res = await this.research.research(forced);
+      if (res.ok && res.finding) return { reply: formatFinding(res.finding), mode: "research" };
+      return { reply: this.researchFailReply(res, forced), mode: "research" };
+    }
+
+    // Natural question the local brain could not answer → look online.
+    if (this.research && this.research.enabled && isResearchQuestion(input)) {
+      const res = await this.research.research(input);
+      if (res.ok && res.finding) return { reply: formatFinding(res.finding), mode: "research" };
+      if (!res.ok) return { reply: this.researchFailReply(res, input.trim()), mode: "research" };
+    }
+
+    if (this.markov.trained) {
+      const gen = this.markov.generate(60);
+      if (gen) return { reply: gen, mode: "generate" };
+    }
+
+    return this.reply(input);
   }
 
   train(): EngineStatus & { trainedMessages: number } {

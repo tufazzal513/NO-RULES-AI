@@ -29,3 +29,13 @@ services:
         value: "true"
       - key: TELEGRAM_SNAPSHOT_INTERVAL_MINUTES
         value: "30"
+      # Online research — 7 free keyless sources. Optional, non-secret, safe
+      # defaults; omit them to keep the defaults.
+      - key: RESEARCH_ENABLED
+        value: "true"
+      - key: RESEARCH_CACHE_TTL_MINUTES
+        value: "360"
+      - key: RESEARCH_TIMEOUT_MS
+        value: "4000"
+      - key: RESEARCH_SAVE_TO_KNOWLEDGE
+        value: "true"

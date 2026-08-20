@@ -5,6 +5,7 @@ import cors from "cors";
 import { TelegramStorage } from "./server/telegram.ts";
 import { TelegramBot, type TelegramMessage } from "./server/telegram-bot.ts";
 import { AIEngine } from "./server/ai/engine.ts";
+import { ResearchService } from "./server/research/research.ts";
 import { openDatabase, resolveDbPath, SNAPSHOT_TABLES } from "./server/db.ts";
 import { buildSnapshot, serializeSnapshot } from "./server/snapshot.ts";
 import { CloudSync, parseBool } from "./server/cloud-sync.ts";
@@ -58,6 +59,26 @@ ai.setHooks({
 });
 
 // ---------------------------------------------------------------------------
+// Online research — 7 free, keyless sources with per-host circuit breakers,
+// a permanent cache and a hard time budget. Every fresh finding is saved into
+// `knowledge`, so it is mirrored to Telegram and survives Render restarts.
+// All four env vars are optional and non-secret (see .env.example).
+// ---------------------------------------------------------------------------
+const research = new ResearchService(
+  db,
+  {
+    enabled: parseBool(process.env.RESEARCH_ENABLED, true),
+    cacheTtlMinutes: Number(process.env.RESEARCH_CACHE_TTL_MINUTES) || 360,
+    timeoutMs: Number(process.env.RESEARCH_TIMEOUT_MS) || 4000,
+    saveToKnowledge: parseBool(process.env.RESEARCH_SAVE_TO_KNOWLEDGE, true),
+  },
+  {
+    onKnowledgeSave: (row) => cloud.mirror("knowledge", row.id, row),
+  }
+);
+ai.setResearch(research);
+
+// ---------------------------------------------------------------------------
 // Telegram bot — chat with your AI directly from Telegram (long-polling)
 // ---------------------------------------------------------------------------
 
@@ -89,6 +110,7 @@ async function handleTelegramMessage(msg: TelegramMessage): Promise<string> {
       "🧠 Memory: \"My name is …\", \"I like …\", \"remember that …\"\n" +
       "📚 Ask about your documents (added in the AI Brain tab)\n" +
       "➗ Math: just type \"12 * 8 + 4\"\n" +
+      "🔎 Research: ask current questions, or /research <topic>\n" +
       "\nCommands:\n/start — welcome\n/help — this help"
     );
   }
@@ -106,8 +128,8 @@ async function handleTelegramMessage(msg: TelegramMessage): Promise<string> {
   const um = db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'user', ?)").run(sid, text);
   tryMirror("chat_messages", um.lastInsertRowid, { id: um.lastInsertRowid, session_id: sid, role: "user", content: text, source: "telegram" });
 
-  // Get the AI's reply.
-  const result = ai.reply(text);
+  // Get the AI's reply (brain first, keyless online research if needed).
+  const result = await ai.replyAsync(text);
 
   // Persist the AI's reply.
   const am = db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'ai', ?)").run(sid, result.reply);
@@ -422,7 +444,7 @@ app.post("/api/v1/chats/:id/messages", (req, res) => {
 // ---------------------------------------------------------------------------
 
 /** Main chat endpoint — saves both messages and returns the AI's reply + mode. */
-app.post("/api/v1/ai/chat", (req, res) => {
+app.post("/api/v1/ai/chat", async (req, res) => {
   if (blockWhileRestoring(req, res)) return;
   try {
     const { sessionId, message } = req.body || {};
@@ -441,7 +463,7 @@ app.post("/api/v1/ai/chat", (req, res) => {
     const um = db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'user', ?)").run(sid, message.trim());
     tryMirror("chat_messages", um.lastInsertRowid, { id: um.lastInsertRowid, session_id: sid, role: "user", content: message.trim() });
 
-    const result = ai.reply(message.trim());
+    const result = await ai.replyAsync(message.trim());
 
     const am = db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'ai', ?)").run(sid, result.reply);
     tryMirror("chat_messages", am.lastInsertRowid, { id: am.lastInsertRowid, session_id: sid, role: "ai", content: result.reply });
@@ -543,6 +565,59 @@ app.delete("/api/v1/memory/:id", (req, res) => {
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Online Research API — 7 keyless sources, circuit breakers, permanent cache.
+// ---------------------------------------------------------------------------
+
+/** Which sources are ready / cooling down, plus cache statistics. */
+app.get("/api/v1/research/status", (req, res) => {
+  try {
+    res.json(research.status());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** Force an online lookup now (fresh cache answered instantly). */
+app.post("/api/v1/research", async (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
+  const { topic } = req.body || {};
+  if (!topic || typeof topic !== "string" || !topic.trim()) {
+    return res.status(400).json({ ok: false, error: "topic is required" });
+  }
+  try {
+    const result = await research.research(topic.trim());
+    if (!result.ok) {
+      return res.status(502).json({
+        ok: false,
+        offline: Boolean(result.offline),
+        triedSources: result.triedSources ?? [],
+        error: result.offline ? "Internet unreachable — try again later." : "No answer found for this topic.",
+      });
+    }
+    res.json({ ok: true, finding: result.finding });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/** Reset every circuit breaker (the "Reset Cooldowns" button), optionally the cache too. */
+app.post("/api/v1/research/reset", (req, res) => {
+  try {
+    const clearCache = req.body?.clearCache === true;
+    const result = research.reset(clearCache);
+    res.json({
+      ok: true,
+      message: clearCache
+        ? "Circuit breakers and research cache cleared — every source is ready again."
+        : "Circuit breakers reset — every source is ready again.",
+      ...result,
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
