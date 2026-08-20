@@ -1,12 +1,13 @@
 import express from "express";
 import path from "path";
-import os from "os";
-import Database from "better-sqlite3";
 import fs from "fs";
 import cors from "cors";
 import { TelegramStorage } from "./server/telegram.ts";
 import { TelegramBot, type TelegramMessage } from "./server/telegram-bot.ts";
 import { AIEngine } from "./server/ai/engine.ts";
+import { openDatabase, resolveDbPath, SNAPSHOT_TABLES } from "./server/db.ts";
+import { buildSnapshot, serializeSnapshot } from "./server/snapshot.ts";
+import { CloudSync, parseBool } from "./server/cloud-sync.ts";
 
 // Initialize express app
 const app = express();
@@ -15,88 +16,13 @@ const PORT = Number(process.env.PORT) || 3000;
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 
-// Initialize SQLite Database
-let dbPath = path.join(process.cwd(), "myai.db");
-
-// Use DATABASE_URL from .env if provided (strip sqlite:/// prefix if present)
-if (process.env.DATABASE_URL) {
-  let customPath = process.env.DATABASE_URL;
-  if (customPath.startsWith("sqlite:///")) {
-    customPath = customPath.replace("sqlite:///", "");
-  } else if (customPath.startsWith("sqlite://")) {
-    customPath = customPath.replace("sqlite://", "");
-  }
-  dbPath = path.resolve(process.cwd(), customPath);
-}
+// Initialize SQLite Database (temporary cache — Telegram is the source of truth)
+const dbPath = resolveDbPath(process.env.DATABASE_URL);
 
 let db: any;
 try {
-  // Ensure the directory exists
-  const dbDir = path.dirname(dbPath);
-  if (!fs.existsSync(dbDir)) {
-    fs.mkdirSync(dbDir, { recursive: true });
-  }
-
-  db = new Database(dbPath);
+  db = openDatabase(dbPath);
   console.log("Connected to SQLite database at", dbPath);
-  db.pragma("journal_mode = WAL");
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT,
-      email TEXT UNIQUE,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS conversations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      title TEXT,
-      telegram_chat_id TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS chat_messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id INTEGER,
-      role TEXT CHECK(role IN ('user', 'ai')),
-      content TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (session_id) REFERENCES conversations(id) ON DELETE CASCADE
-    );
-    CREATE TABLE IF NOT EXISTS telegram_index (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      collection TEXT NOT NULL,
-      record_id TEXT NOT NULL,
-      telegram_message_id INTEGER,
-      telegram_file_id TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS knowledge (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT,
-      content TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS memory (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      key TEXT UNIQUE,
-      value TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS ai_model (
-      key TEXT PRIMARY KEY,
-      value TEXT,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-
-  // Lightweight migrations for databases created before a column existed.
-  const ensureColumn = (table: string, column: string, ddl: string) => {
-    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-    if (!cols.some((c) => c.name === column)) {
-      db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
-    }
-  };
-  ensureColumn("conversations", "telegram_chat_id", "telegram_chat_id TEXT");
 } catch (err) {
   console.error("Error opening database:", err);
 }
@@ -111,11 +37,36 @@ const telegram = new TelegramStorage({
 const ai = new AIEngine(db);
 
 // ---------------------------------------------------------------------------
+// CloudSync — Telegram private channel = permanent database / source of truth,
+// local SQLite = temporary cache. Handles startup restore, periodic snapshots
+// and mirroring of every important change.
+// ---------------------------------------------------------------------------
+const cloud = new CloudSync({
+  db,
+  telegram,
+  autoRestore: parseBool(process.env.TELEGRAM_AUTO_RESTORE, true),
+  autoSnapshot: parseBool(process.env.TELEGRAM_AUTO_SNAPSHOT, true),
+  restoreOnEmptyOnly: parseBool(process.env.TELEGRAM_RESTORE_ON_EMPTY_ONLY, true),
+  snapshotIntervalMinutes: Number(process.env.TELEGRAM_SNAPSHOT_INTERVAL_MINUTES) || 30,
+});
+
+// Memory learned during a chat and the retrained model are mirrored too, so
+// they never live only in the ephemeral SQLite file.
+ai.setHooks({
+  onMemoryChange: (row) => cloud.mirror("memory", row.id ?? row.key, row),
+  onModelChange: (row) => cloud.mirror("ai_model", row.key, { key: row.key, value: row.value }),
+});
+
+// ---------------------------------------------------------------------------
 // Telegram bot — chat with your AI directly from Telegram (long-polling)
 // ---------------------------------------------------------------------------
 
 /** Route one incoming Telegram text message through the AI and persist it. */
 async function handleTelegramMessage(msg: TelegramMessage): Promise<string> {
+  // The bot must not touch the database while a restore is running.
+  if (cloud.isRestoring()) {
+    return "♻️ I'm restoring my memory from the cloud backup right now. Please try again in a few seconds.";
+  }
   const text = (msg.text || "").trim();
   const chatId = msg.chat.id;
   const name = msg.chat.first_name || msg.from?.first_name || msg.chat.username || "friend";
@@ -176,54 +127,25 @@ if (process.env.TELEGRAM_BOT_TOKEN) {
 
 /** Push a record to Telegram as a JSON message (non-blocking, best-effort). */
 function tryMirror(collection: string, recordId: string | number, payload: any): void {
-  if (!telegram.configured) return;
-  telegram
-    .saveRecord(collection, recordId, payload)
-    .then((r) => {
-      try {
-        db.prepare(
-          "INSERT INTO telegram_index (collection, record_id, telegram_message_id, telegram_file_id) VALUES (?, ?, ?, ?)"
-        ).run(collection, String(recordId), r.messageId, null);
-      } catch (e: any) {
-        console.error("Failed to index telegram message:", e.message);
-      }
-    })
-    .catch((err) => console.error("Telegram mirror failed:", err.message));
+  cloud.mirror(collection, recordId, payload);
 }
 
-/** Dump the whole local database as a JSON object (all tables). */
-function dumpAll(): Record<string, any[]> {
-  const tables = ["users", "conversations", "chat_messages", "telegram_index"];
-  const dump: Record<string, any[]> = {};
-  for (const table of tables) {
-    try {
-      dump[table] = db.prepare(`SELECT * FROM ${table}`).all();
-    } catch {
-      dump[table] = [];
-    }
+/** Push a delete tombstone to Telegram (non-blocking, best-effort). */
+function tryMirrorDelete(collection: string, recordId: string | number): void {
+  cloud.mirrorDelete(collection, recordId);
+}
+
+/**
+ * Guard for every AI/data endpoint: while the startup restore is running we do
+ * not touch the database, so callers get a clear 503 instead of half-restored
+ * answers.
+ */
+function blockWhileRestoring(req: express.Request, res: express.Response): boolean {
+  if (cloud.isRestoring()) {
+    res.status(503).json({ error: "AI data is being restored", state: "restoring" });
+    return true;
   }
-  return dump;
-}
-
-/** Restore tables from a JSON dump object. */
-function importDump(dump: Record<string, any[]>) {
-  const tables = ["users", "conversations", "chat_messages", "telegram_index"];
-  const tx = db.transaction(() => {
-    for (const table of tables) {
-      if (!Array.isArray(dump[table])) continue;
-      db.prepare(`DELETE FROM ${table}`).run();
-      const rows = dump[table];
-      if (rows.length === 0) continue;
-      const columns = Object.keys(rows[0]);
-      const insert = db.prepare(
-        `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`
-      );
-      for (const row of rows) {
-        insert.run(...columns.map((c) => row[c]));
-      }
-    }
-  });
-  tx();
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -263,10 +185,22 @@ app.get("/api/v1/health/detailed", (req, res) => {
 app.get("/api/v1/telegram/status", async (req, res) => {
   try {
     const status = await telegram.status();
-    const indexed = (db.prepare("SELECT COUNT(*) as count FROM telegram_index").get() as any).count;
-    res.json({ ...status, indexedRecords: indexed });
+    let indexed = 0;
+    try {
+      indexed = (db.prepare("SELECT COUNT(*) as count FROM telegram_index").get() as any).count;
+    } catch {
+      indexed = 0;
+    }
+    res.json({ ...status, indexedRecords: indexed, ...cloud.statusPayload() });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    // Never fail the status endpoint just because Telegram is unreachable.
+    res.json({
+      configured: telegram.configured,
+      botTokenSet: Boolean(process.env.TELEGRAM_BOT_TOKEN),
+      chatIdSet: Boolean(process.env.TELEGRAM_STORAGE_CHAT_ID),
+      telegramError: err.message,
+      ...cloud.statusPayload(),
+    });
   }
 });
 
@@ -291,17 +225,18 @@ app.post("/api/v1/telegram/sync", async (req, res) => {
     if (!telegram.configured) {
       return res.status(400).json({ success: false, error: "Telegram not configured." });
     }
-    const counts = { users: 0, conversations: 0, chat_messages: 0 };
-    const tables = ["users", "conversations", "chat_messages"] as const;
+    const counts: Record<string, number> = {};
+    const tables = SNAPSHOT_TABLES.filter((t) => t !== "telegram_index");
     for (const table of tables) {
+      counts[table] = 0;
       const rows = db.prepare(`SELECT * FROM ${table}`).all();
       for (const row of rows) {
-        const id = row.id ?? row.rowid ?? `${Date.now()}-${Math.random()}`;
+        const id = row.id ?? row.key ?? row.rowid ?? `${Date.now()}-${Math.random()}`;
         const r = await telegram.saveRecord(table, id, row);
         db.prepare(
           "INSERT INTO telegram_index (collection, record_id, telegram_message_id, telegram_file_id) VALUES (?, ?, ?, ?)"
         ).run(table, String(id), r.messageId, null);
-        counts[table as keyof typeof counts]++;
+        counts[table]++;
       }
     }
     res.json({ success: true, message: "All data synced to Telegram channel.", counts });
@@ -310,32 +245,44 @@ app.post("/api/v1/telegram/sync", async (req, res) => {
   }
 });
 
-/** Create a full JSON snapshot file and upload it to Telegram. */
+/** Create a full gzipped JSON snapshot and upload it to the Telegram channel. */
 app.post("/api/v1/telegram/snapshot", async (req, res) => {
   try {
-    const dump = dumpAll();
-    const snapshotName = `myai_snapshot_${Date.now()}.json`;
-    const tmpPath = path.join(os.tmpdir(), snapshotName);
-    let result;
-    try {
-      fs.writeFileSync(tmpPath, JSON.stringify(dump, null, 2), "utf-8");
-      result = await telegram.saveFile(tmpPath, `📦 Full snapshot — ${new Date().toISOString()}`);
-    } finally {
-      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    if (!telegram.configured) {
+      return res.status(400).json({ success: false, error: "Telegram not configured." });
     }
-    db.prepare(
-      "INSERT INTO telegram_index (collection, record_id, telegram_message_id, telegram_file_id) VALUES (?, ?, ?, ?)"
-    ).run("snapshot", result.fileId, result.messageId, result.fileId);
+    const result = await cloud.snapshot({ force: req.body?.force !== false, reason: "manual" });
+    if (!result.success && !result.skipped) {
+      return res.status(500).json({ success: false, error: result.error });
+    }
     res.json({
       success: true,
-      message: "Snapshot uploaded to Telegram.",
+      skipped: Boolean(result.skipped),
+      message: result.skipped
+        ? `Snapshot skipped — ${result.reason}`
+        : "Snapshot uploaded to Telegram (gzipped, checksummed and pinned).",
       fileId: result.fileId,
       messageId: result.messageId,
       fileName: result.fileName,
-      hint: "Keep this fileId safe — use it to restore everything later.",
+      counts: result.counts,
+      checksum: result.checksum,
+      totalRecords: result.totalRecords,
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** Download the current snapshot as a local file (no Telegram needed). */
+app.get("/api/v1/telegram/snapshot/download", (req, res) => {
+  try {
+    const doc = buildSnapshot(db);
+    const { buffer, fileName } = serializeSnapshot(doc, false);
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
+    res.send(buffer);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -352,26 +299,36 @@ app.get("/api/v1/telegram/snapshots", (req, res) => {
   }
 });
 
-/** Restore the database from a Telegram snapshot (by fileId, or the latest one). */
+/** Restore the database from a Telegram snapshot (by fileId, or the pinned latest one). */
 app.post("/api/v1/telegram/restore", async (req, res) => {
   try {
-    let fileId: string | undefined = req.body?.fileId;
-    if (!fileId) {
-      const latest = db
-        .prepare("SELECT telegram_file_id FROM telegram_index WHERE collection = 'snapshot' ORDER BY id DESC LIMIT 1")
-        .get() as any;
-      fileId = latest?.telegram_file_id;
+    if (!telegram.configured) {
+      return res.status(400).json({ success: false, error: "Telegram not configured." });
     }
-    if (!fileId) {
-      return res.status(400).json({ success: false, error: "No snapshot fileId provided and none found locally." });
+    const result = await cloud.restore({
+      fileId: req.body?.fileId,
+      // A manual restore from the UI is an explicit action, so it may overwrite.
+      force: req.body?.force !== false,
+      emptyOnly: req.body?.emptyOnly === true,
+    });
+    if (!result.success) {
+      const code = result.skipped ? 409 : 500;
+      return res.status(code).json({
+        success: false,
+        skipped: Boolean(result.skipped),
+        error: result.error || result.reason,
+        state: cloud.getState(),
+      });
     }
-    const buffer = await telegram.downloadFile(fileId);
-    const dump = JSON.parse(buffer.toString("utf-8"));
-    importDump(dump);
     res.json({
       success: true,
-      message: "Database restored from Telegram snapshot.",
-      restoredTables: Object.keys(dump).filter((k) => Array.isArray(dump[k])),
+      message: result.skipped
+        ? `Restore skipped — ${result.reason}`
+        : "Database restored from the Telegram snapshot.",
+      restored: result.restored,
+      fileId: result.fileId,
+      checksum: result.checksum,
+      state: cloud.getState(),
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
@@ -420,6 +377,7 @@ app.get("/api/v1/chats", (req, res) => {
 });
 
 app.post("/api/v1/chats", (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
   const { title } = req.body;
   try {
     const info = db
@@ -445,6 +403,7 @@ app.get("/api/v1/chats/:id/messages", (req, res) => {
 });
 
 app.post("/api/v1/chats/:id/messages", (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
   const { role, content } = req.body;
   try {
     const info = db
@@ -464,6 +423,7 @@ app.post("/api/v1/chats/:id/messages", (req, res) => {
 
 /** Main chat endpoint — saves both messages and returns the AI's reply + mode. */
 app.post("/api/v1/ai/chat", (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
   try {
     const { sessionId, message } = req.body || {};
     if (!message || typeof message !== "string" || !message.trim()) {
@@ -493,8 +453,16 @@ app.post("/api/v1/ai/chat", (req, res) => {
 });
 
 app.post("/api/v1/ai/train", (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
   try {
     const stats = ai.train();
+    // The trained model lives in `ai_model` — mirror it so it is never lost.
+    try {
+      const row = db.prepare("SELECT key, value, updated_at FROM ai_model WHERE key = 'markov'").get() as any;
+      if (row) tryMirror("ai_model", "markov", { key: row.key, value: row.value, updated_at: row.updated_at });
+    } catch {
+      /* best-effort */
+    }
     res.json({ success: true, message: "Model trained on your messages.", stats });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -519,6 +487,7 @@ app.get("/api/v1/knowledge", (req, res) => {
 });
 
 app.post("/api/v1/knowledge", (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
   const { title, content } = req.body || {};
   if (!content || typeof content !== "string" || !content.trim()) {
     return res.status(400).json({ error: "content is required" });
@@ -533,8 +502,10 @@ app.post("/api/v1/knowledge", (req, res) => {
 });
 
 app.delete("/api/v1/knowledge/:id", (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
   try {
     db.prepare("DELETE FROM knowledge WHERE id = ?").run(req.params.id);
+    tryMirrorDelete("knowledge", req.params.id);
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -551,10 +522,13 @@ app.get("/api/v1/memory", (req, res) => {
 });
 
 app.post("/api/v1/memory", (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
   const { key, value } = req.body || {};
   if (!key || !value) return res.status(400).json({ error: "key and value are required" });
   try {
     db.prepare("INSERT INTO memory (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
+    const row = db.prepare("SELECT * FROM memory WHERE key = ?").get(key) as any;
+    tryMirror("memory", row?.id ?? key, { id: row?.id, key, value });
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -562,8 +536,10 @@ app.post("/api/v1/memory", (req, res) => {
 });
 
 app.delete("/api/v1/memory/:id", (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
   try {
     db.prepare("DELETE FROM memory WHERE id = ?").run(req.params.id);
+    tryMirrorDelete("memory", req.params.id);
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -618,32 +594,76 @@ async function startServer() {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 
-  // Start the Telegram bot (if configured) — lets you chat with your AI from
-  // your phone's Telegram app. Long-polling, so no public webhook URL needed.
-  if (telegramBot) {
-    telegramBot.start().catch((err) => console.error("Failed to start Telegram bot:", err.message));
+  // -------------------------------------------------------------------------
+  // Startup restore — Telegram private channel is the permanent database, the
+  // local SQLite file is only a cache that Render Free wipes on every restart.
+  //
+  // The HTTP server is already listening (so Render's health check passes and
+  // the container can wake up), but every AI/data endpoint answers 503 while
+  // `cloud` is in the `restoring` state, and the Telegram bot is only started
+  // AFTER the restore has finished.
+  // -------------------------------------------------------------------------
+  console.log("🚀 Application state: starting");
+  try {
+    await cloud.runStartupRestore();
+    // The Markov model may have just been restored from the channel.
+    ai.reload();
+  } catch (err: any) {
+    console.error("❌ Startup restore crashed (continuing with local data):", err?.message || err);
+  }
+  console.log(`🚀 Application state: ${cloud.getState()}`);
+
+  if (cloud.getState() === "restore_failed") {
+    console.error(
+      "❌ Restore failed. Local data was NOT modified. The Telegram bot stays OFF so it cannot write on top of an unrestored database. " +
+        "Fix the issue and use 'Restore Latest' in the Telegram Storage tab, or restart the service."
+    );
+  } else {
+    cloud.markReady();
+    // Long-polling starts only once the app is ready.
+    if (telegramBot) {
+      telegramBot.start().catch((err) => console.error("Failed to start Telegram bot:", err.message));
+    }
+    cloud.startAutoSnapshot();
   }
 
-  const shutdown = () => {
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     telegramBot?.stop();
+    cloud.stopAutoSnapshot();
+
+    // Best-effort final snapshot so nothing is lost when Render spins us down.
+    try {
+      await cloud.finalSnapshot(8000);
+    } catch (e: any) {
+      console.warn("⚠️  Final snapshot failed:", e?.message || e);
+    }
+
     server.close(() => {
       console.log("HTTP server closed");
       if (db) {
-        db.close();
+        try {
+          db.close();
+        } catch {
+          /* ignore */
+        }
       }
       process.exit(0);
     });
+    // Hard stop if the socket refuses to close in time.
+    setTimeout(() => process.exit(0), 10000).unref();
   };
 
-  // Handle graceful shutdown
   process.on("SIGTERM", () => {
     console.log("SIGTERM signal received: closing HTTP server");
-    shutdown();
+    void shutdown();
   });
 
   process.on("SIGINT", () => {
     console.log("SIGINT signal received: closing HTTP server");
-    shutdown();
+    void shutdown();
   });
 }
 

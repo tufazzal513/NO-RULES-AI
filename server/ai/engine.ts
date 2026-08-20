@@ -32,12 +32,31 @@ export interface EngineStatus {
   vocabSize: number;
 }
 
+/** Optional hooks so the server can mirror AI-side writes to Telegram. */
+export interface AIEngineHooks {
+  onMemoryChange?: (row: { id?: number; key: string; value: string }) => void;
+  onModelChange?: (row: { key: string; value: string }) => void;
+}
+
 export class AIEngine {
   private db: any;
   private markov = new MarkovModel();
+  private hooks: AIEngineHooks;
 
-  constructor(db: any) {
+  constructor(db: any, hooks: AIEngineHooks = {}) {
     this.db = db;
+    this.hooks = hooks;
+    this.load();
+  }
+
+  /** Attach/replace the mirror hooks after construction. */
+  setHooks(hooks: AIEngineHooks): void {
+    this.hooks = { ...this.hooks, ...hooks };
+  }
+
+  /** Reload the persisted model — used right after a Telegram restore. */
+  reload(): void {
+    this.markov.reset();
     this.load();
   }
 
@@ -58,6 +77,7 @@ export class AIEngine {
           "INSERT INTO ai_model (key, value) VALUES ('markov', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP"
         )
         .run(json);
+      this.hooks.onModelChange?.({ key: "markov", value: json });
     } catch (e) {
       console.error("Failed to persist AI model:", (e as Error).message);
     }
@@ -73,6 +93,12 @@ export class AIEngine {
     this.db
       .prepare("INSERT INTO memory (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
       .run(key, value);
+    try {
+      const row = this.db.prepare("SELECT id FROM memory WHERE key = ?").get(key) as any;
+      this.hooks.onMemoryChange?.({ id: row?.id, key, value });
+    } catch {
+      /* mirroring is best-effort */
+    }
   }
 
   private allMemory(): { key: string; value: string }[] {

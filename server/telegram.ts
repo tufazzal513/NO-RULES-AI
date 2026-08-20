@@ -194,10 +194,73 @@ export class TelegramStorage {
     };
   }
 
+  /** Upload an in-memory buffer as a document (no temp file needed). */
+  async saveBuffer(
+    fileName: string,
+    content: Buffer,
+    caption?: string
+  ): Promise<{ messageId: number; fileId: string; fileName: string; date: number }> {
+    const result = await this.callMultipart(
+      "sendDocument",
+      {
+        chat_id: this.chatId,
+        caption: (caption || `📁 ${fileName}`).slice(0, 1000),
+        disable_notification: "true",
+      },
+      { name: fileName, content }
+    );
+    return {
+      messageId: result.message_id,
+      fileId: result.document?.file_id || "",
+      fileName,
+      date: result.date,
+    };
+  }
+
   /** Send plain text to the channel. */
   async sendText(text: string): Promise<{ messageId: number }> {
     const result = await this.call("sendMessage", { chat_id: this.chatId, text });
     return { messageId: result.message_id };
+  }
+
+  /**
+   * Pin a message in the channel.
+   *
+   * This is how the "latest valid snapshot" survives a Render redeploy: a bot
+   * cannot list a channel's history, but `getChat` always returns the channel's
+   * pinned message. So we pin the newest snapshot document and, after a restart
+   * with a wiped disk, we read the pin to find the file to restore from.
+   */
+  async pinMessage(messageId: number): Promise<void> {
+    await this.call("pinChatMessage", {
+      chat_id: this.chatId,
+      message_id: messageId,
+      disable_notification: true,
+    });
+  }
+
+  /** Remove the current pin (best-effort). */
+  async unpinAll(): Promise<void> {
+    await this.call("unpinAllChatMessages", { chat_id: this.chatId });
+  }
+
+  /** Read the channel's pinned message — used to discover the latest snapshot. */
+  async getPinnedMessage(): Promise<any | null> {
+    const chat = await this.call("getChat", { chat_id: this.chatId });
+    return chat?.pinned_message || null;
+  }
+
+  /**
+   * Discover the latest snapshot published to the channel.
+   * Returns the pinned snapshot document's permanent file_id, if any.
+   */
+  async findLatestSnapshot(): Promise<{ fileId: string; fileName: string; messageId: number } | null> {
+    const pinned = await this.getPinnedMessage();
+    const doc = pinned?.document;
+    if (!doc?.file_id) return null;
+    const name: string = doc.file_name || "";
+    if (name && !name.includes("snapshot")) return null;
+    return { fileId: doc.file_id, fileName: name, messageId: pinned.message_id };
   }
 
   /** Download a file (or JSON snapshot) by its permanent file_id. */
