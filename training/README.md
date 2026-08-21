@@ -166,3 +166,31 @@ MODEL_PATH=http://localhost:11434
 | `unsloth/Llama-3.1-8B-Instruct` | ~16 GB | বেশি শক্তিশালী, বেশি VRAM লাগবে |
 
 > ⚠️ **সত্যি কথা:** ছোট ডেটাসেটে (কয়েকশো কথোপকথন) ফাইন-টিউন করলে মডেল আপনার **স্টাইল/ফরম্যাট** শিখবে, কিন্তু বিশ্ব-জ্ঞান বাড়বে না। সেটার জন্য RAG (MY-AI-এর Knowledge ট্যাব) ব্যবহার করুন — সেটাই সবচেয়ে কার্যকর।
+
+## 🛟 মেমোরি / OOM — স্ক্রিপ্ট নিজেই সামলায়
+
+ফ্রি Colab T4 (১৫ GB VRAM + ১২.৭ GB RAM) আর Kaggle P100-এ OOM যেন ট্রেনিং না
+থামায়, সেজন্য `train_lora.py`-তে কয়েক স্তরের সুরক্ষা আছে:
+
+| স্তর | কী করে |
+|---|---|
+| অ্যালোকেটর | `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` — ফ্র্যাগমেন্টেশনজনিত OOM বন্ধ |
+| অটো-টিউন | GPU-র আসল VRAM দেখে `--batch-size` / `--max-seq-length` নামিয়ে দেয় (কখনো বাড়ায় না)। effective batch ঠিক রাখতে grad-accum বাড়ে |
+| স্পিড-প্রোব | আসল রানের আগেই ছোট প্রোব চালিয়ে OOM ধরে ফেলে; প্রোব শেষে optimizer/grad পুরোপুরি ফ্রি করে (`gc` + `empty_cache`) |
+| রিট্রাই ল্যাডার | OOM হলে ধাপে ধাপে হালকা করে চেকপয়েন্ট থেকে আবার চালায়: eval বন্ধ → batch ১ → packing বন্ধ → seq ছোট → grad-accum কম |
+| eval | `per_device_eval_batch_size=1`, `prediction_loss_only`, সর্বোচ্চ ২০০ রো — eval-ই সবচেয়ে বড় মেমোরি স্পাইক |
+| RAM | ডাটা এক পাসেই `text`-এ রূপান্তর (কর্পাস দুবার RAM-এ থাকে না), `dataset_num_proc=1` (CUDA init-এর পর fork করলে Colab-এর RAM ডাবল হয়ে সেশন মরে) |
+| GGUF এক্সপোর্ট | RAM বাজেট ৬০% → ৪০% → ২৫% নামিয়ে রিট্রাই; না পারলেও LoRA adapter সেভ থাকে |
+
+হাতে নিয়ন্ত্রণ চাইলে:
+
+```bash
+python train_lora.py --recipe balanced --time-budget-hours 3 \
+    --batch-size 1 --grad-accum 16 --max-seq-length 512 \
+    --no-eval --no-packing --no-autotune
+```
+
+`colab_one_click.py` / `kaggle_one_click.py` চাইল্ড প্রসেসের exit code দেখে:
+`-9` / `137` মানে RAM শেষ হয়ে প্রসেস kill হয়েছে — তখন নিজে থেকেই হালকা সেটিংসে
+(`--no-eval --batch-size 1`, তারপর `--no-packing` + ছোট seq) সর্বোচ্চ ৩ বার আবার
+চালায়, প্রতিবারই শেষ চেকপয়েন্ট থেকে।
