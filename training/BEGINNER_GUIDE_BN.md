@@ -83,7 +83,7 @@ Run চাপার পর:
 | সেশন হঠাৎ মরে যায় / `exit -9` | RAM শেষ। স্ক্রিপ্ট নিজেই হালকা সেটিংসে ৩ বার পর্যন্ত আবার চালায়; না হলে `HOURS = 1` করুন |
 | `🚨 রিপোতে অ্যাক্সেস হচ্ছে না` | রিপোটা private — GitHub → Settings → General → Danger Zone → **Change to public** |
 | `pip install`-এ এরর | সেলটা আবার Run দিন (Colab-এ মাঝে মাঝে হয়) |
-| Colab-এর GPU লিমিট শেষ | [Kaggle](https://kaggle.com) ব্যবহার করুন — `training/kaggle_one_click.py`, সপ্তাহে ৩০ ঘণ্টা ফ্রি, ডিসকানেক্টও হয় না |
+| Colab-এর GPU লিমিট শেষ / RAM বারবার শেষ হচ্ছে | [Kaggle](https://kaggle.com) ব্যবহার করুন — RAM ~২৯–৩২ GB (Colab-এর ১২.৭ GB-র বদলে), সপ্তাহে ~৩০ ঘণ্টা ফ্রি GPU। পুরো ধাপে ধাপে: [`KAGGLE_GUIDE_BN.md`](./KAGGLE_GUIDE_BN.md) |
 
 ---
 

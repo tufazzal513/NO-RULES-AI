@@ -1004,6 +1004,7 @@ export default function App() {
   const [pasteTitle, setPasteTitle] = useState("");
   const [pasteContent, setPasteContent] = useState("");
   const [pasteBusy, setPasteBusy] = useState(false);
+  const [cellText, setCellText] = useState("");
 
   const fetchTraining = async () => {
     try {
@@ -1054,24 +1055,34 @@ export default function App() {
     }
   };
 
-  /** Copy a ready-to-paste Colab cell with this panel's URL + token filled in. */
-  const copyColabCell = async () => {
+  /**
+   * Copy a ready-to-paste Colab/Kaggle cell with this panel's URL + token
+   * filled in. Values are passed via environment variables (single-quoted
+   * Python literals) — no string surgery on the fetched script, so quoting
+   * can never break the generated code.
+   */
+  const copyTrainCell = async (platform: "colab" | "kaggle") => {
     const token = sessionStorage.getItem(ADMIN_TOKEN_KEY) ?? "";
+    // Safe single-quoted Python string literal (escapes backslash, quote, newlines).
+    const py = (v: string) =>
+      "'" + String(v).replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/[\r\n]/g, "") + "'";
+    const file = platform === "colab" ? "colab_one_click.py" : "kaggle_one_click.py";
     const cell = [
-      "# MY-AI — এক-ক্লিক GPU ট্রেনিং (Google Colab · T4)",
-      "# Runtime → Change runtime type → T4 GPU → Save, তারপর ▶ Run",
-      "import urllib.request",
-      "url = 'https://raw.githubusercontent.com/tufazzal513/NO-RULES-AI/main/training/colab_one_click.py'",
-      "src = urllib.request.urlopen(url).read().decode()",
-      `src = src.replace("PANEL_URL      = ''", "PANEL_URL      = ${JSON.stringify(window.location.origin)}")`,
-      `src = src.replace("PANEL_TOKEN    = ''", "PANEL_TOKEN    = ${JSON.stringify(token)}")`,
-      "exec(compile(src, 'colab_one_click.py', 'exec'))",
+      "import os, urllib.request",
+      `os.environ['MYAI_PANEL_URL']   = ${py(window.location.origin)}`,
+      `os.environ['MYAI_ADMIN_TOKEN'] = ${py(token)}`,
+      "os.environ['MYAI_HOURS']       = '5'",
+      "os.environ['MYAI_PLAN']        = 'balanced'",
+      "os.environ['MYAI_OWNER']       = ''",
+      `url = 'https://raw.githubusercontent.com/tufazzal513/NO-RULES-AI/main/training/${file}'`,
+      `exec(compile(urllib.request.urlopen(url).read().decode(), ${py(file)}, 'exec'))`,
     ].join("\n");
     try {
       await navigator.clipboard.writeText(cell);
-      showToast("Colab cell কপি হয়েছে — Colab-এ পেস্ট করে Run দিন 🚀");
+      showToast(platform === "colab" ? "Colab cell কপি হয়েছে — পেস্ট করে Run দিন 🚀" : "Kaggle cell কপি হয়েছে — পেস্ট করে Run All দিন 🚀");
     } catch {
-      showToast("⚠️ কপি করা গেল না — ব্রাউজার ব্লক করেছে");
+      setCellText(cell);
+      showToast("⚠️ ক্লিপবোর্ড ব্লক — বক্স থেকে কপি করুন");
     }
   };
 
@@ -1874,11 +1885,18 @@ export default function App() {
                     {pill.text}
                   </span>
                   <button
-                    onClick={copyColabCell}
+                    onClick={() => copyTrainCell("colab")}
                     className="px-3 py-1.5 bg-[#1a73e8] hover:bg-[#2b7de2] text-white rounded-lg text-xs font-medium transition-colors flex items-center gap-1"
                     title="Colab-এ পেস্ট করার জন্য রেডি সেল কপি করুন"
                   >
                     <Copy size={12} /> Copy Colab cell
+                  </button>
+                  <button
+                    onClick={() => copyTrainCell("kaggle")}
+                    className="px-3 py-1.5 bg-[#1e1f20] hover:bg-[#282a2c] text-[#e8eaed] border border-[#3c4043] rounded-lg text-xs font-medium transition-colors flex items-center gap-1"
+                    title="Kaggle-এ পেস্ট করার জন্য রেডি সেল কপি করুন"
+                  >
+                    <Copy size={12} /> Copy Kaggle cell
                   </button>
                   {(gpu?.runs?.length ?? 0) > 0 && (
                     <button
@@ -1892,11 +1910,35 @@ export default function App() {
                 </div>
               }
             >
+              {cellText && (
+                <div className="mb-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="text-[11px] font-medium text-[#9aa0a6] uppercase tracking-wider">
+                      ক্লিপবোর্ড ব্লকড — এখান থেকে কপি করুন
+                    </div>
+                    <button
+                      onClick={() => setCellText("")}
+                      className="text-[11px] text-[#9aa0a6] hover:text-[#e8eaed]"
+                      title="বন্ধ করুন"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <textarea
+                    readOnly
+                    value={cellText}
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="w-full h-40 p-2.5 rounded-lg bg-[#1e1f20] border border-[#3c4043] text-[#e8eaed] text-xs font-mono leading-relaxed resize-y focus:outline-none focus:border-[#1a73e8]"
+                    spellCheck={false}
+                  />
+                </div>
+              )}
               {!g ? (
                 <div className="text-[13px] text-[#9aa0a6] leading-relaxed">
                   এখনো কোনো GPU ট্রেনিং রিপোর্ট আসেনি।{" "}
-                  <span className="text-[#e8eaed]">“Copy Colab cell”</span> চেপে Colab-এ পেস্ট করে Run দিন —
-                  ট্রেনিং শুরু হলেই এখানে step, loss, ETA সব লাইভ দেখতে পাবেন।
+                  <span className="text-[#e8eaed]">“Copy Colab cell”</span> অথবা{" "}
+                  <span className="text-[#e8eaed]">“Copy Kaggle cell”</span> চেপে নিজের পছন্দের প্ল্যাটফর্মে
+                  পেস্ট করে Run দিন — ট্রেনিং শুরু হলেই এখানে step, loss, ETA সব লাইভ দেখতে পাবেন।
                 </div>
               ) : (
                 <>
