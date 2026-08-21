@@ -24,6 +24,34 @@ python build_dataset.py --input myai-dataset.jsonl --output data
 ```
 → `data/train.jsonl` আর `data/val.jsonl` তৈরি হবে।
 
+### 🌐 বিকল্প — Hugging Face ডেটাসেট (যেমন UltraChat 200k)
+
+> ⚠️ **মনে রাখুন:** শুধু `load_dataset()` করলে ডেটা মডেলের মাথায় ঢুকে **না** — সেটা শুধু ডাউনলোড। মাথায় ঢুকাতে হলে রূপান্তর (এই স্ক্রিপ্ট) + ট্রেনিং (`train_lora.py`) দুটোই লাগবে।
+
+আপনার নিজের ডেটার পাশাপাশি (বা পরিবর্তে) যেকোনো Hugging Face চ্যাট ডেটাসেট দিয়ে ট্রেন করতে পারেন:
+
+```bash
+# নিজের PC-তে (বা Colab সেলে ! দিয়ে)
+python build_from_hf.py \
+    --dataset HuggingFaceH4/ultrachat_200k \
+    --split train_sft \
+    --limit 5000 \
+    --output data
+```
+
+→ `data/train.jsonl` + `data/val.jsonl` তৈরি হবে — তারপর ধাপ ৩-এ চালান।
+
+**দরকারি অপশন:**
+
+| অপশন | কাজ |
+|---|---|
+| `--limit 5000` | কতগুলো কথোপকথন নেবেন (পুরো UltraChat ~200k — শুরুতে ৫–১০ হাজারই ভালো) |
+| `--streaming` | পুরো ডেটাসেট (গিগাবাইট!) ডাউনলোড না করে স্ট্রিম করে — ধীর নেটে দারুণ |
+| `--dataset <id>` | অন্য যেকোনো চ্যাট ডেটাসেট (ShareGPT স্টাইল `messages` ফিল্ড থাকলেই চলবে) |
+| `--seed 42` | একই র‍্যান্ডম স্যাম্পল বারবার পেতে |
+
+> 💡 UltraChat দিয়ে ট্রেন করলে মডেল **জেনারেল চ্যাট** শিখবে। "আপনার" AI বানাতে চাইলে আপনার এক্সপোর্ট করা ডেটার সাথে মিশিয়ে নিন — দুটোই একই `instruction/output` ফরম্যাট, তাই ফাইল দুটো একসাথে জোড়া দিলেই হবে।
+
 ## ☁️ ধাপ ৩ — ট্রেন (Google Colab — ফ্রি GPU, সবচেয়ে সহজ)
 
 1. [colab.research.google.com](https://colab.research.google.com)-এ নতুন notebook খুলুন
