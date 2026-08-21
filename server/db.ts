@@ -22,6 +22,7 @@ export const SNAPSHOT_TABLES = [
   "memory",
   "ai_model",
   "research_cache",
+  "research_negcache",
   "telegram_index",
 ] as const;
 
@@ -59,6 +60,7 @@ export const SCHEMA_SQL = `
     session_id INTEGER,
     role TEXT CHECK(role IN ('user', 'ai')),
     content TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'web',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (session_id) REFERENCES conversations(id) ON DELETE CASCADE
   );
@@ -97,6 +99,14 @@ export const SCHEMA_SQL = `
     source TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+  -- Negative cache: topics that were searched cleanly and had NO answer.
+  -- Remembered briefly so repeated questions don't hammer the public sources
+  -- (and therefore don't trip their rate limits). Snapshot table too.
+  CREATE TABLE IF NOT EXISTS research_negcache (
+    key TEXT PRIMARY KEY,
+    topic TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
   -- Local-only bookkeeping (never part of a snapshot): remembers the last
   -- snapshot/restore checksums so we can skip no-op snapshots and refuse to
   -- restore the very same snapshot twice.
@@ -118,6 +128,8 @@ export function applySchema(db: any): void {
     }
   };
   ensureColumn("conversations", "telegram_chat_id", "telegram_chat_id TEXT");
+  // Where a chat message came from: 'web' | 'training' | 'telegram'.
+  ensureColumn("chat_messages", "source", "source TEXT NOT NULL DEFAULT 'web'");
 }
 
 /** Resolve DATABASE_URL (`sqlite:///…`) into a real filesystem path. */

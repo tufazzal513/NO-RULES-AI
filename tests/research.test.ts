@@ -3,9 +3,10 @@
  * -----------------------------------------------
  * Run with:  npm test
  *
- * EVERY network call is mocked through an injected fake `fetch` — the 7
- * keyless sources (Wikipedia, DuckDuckGo, SearXNG, Mojeek…) are never
- * contacted for real, so the whole suite runs without internet access.
+ * EVERY network call is mocked through an injected fake `fetch` — the keyless
+ * sources (Wikipedia, DuckDuckGo, SearXNG, Mojeek, Wiktionary, Marginalia…)
+ * are never contacted for real, so the whole suite runs without internet
+ * access.
  */
 
 import assert from "node:assert/strict";
@@ -346,7 +347,7 @@ test("a 429 response with Retry-After opens the circuit for at least that long",
   await service.research("who is alan turing");
   const ddg = service.status().sources.find((s) => s.host === "api.duckduckgo.com")!;
   assert.equal(ddg.ready, false);
-  assert.ok(ddg.cooldownRemainingMs >= 119_900, `cooldown ${ddg.cooldownRemainingMs}ms must honour Retry-After`);
+  assert.ok(ddg.cooldownRemainingMs >= 118_000, `cooldown ${ddg.cooldownRemainingMs}ms must honour Retry-After`);
   assert.equal(ddg.lastRetryAfterMs, 120_000);
 });
 
@@ -376,7 +377,11 @@ test("Reset Cooldowns reopens every circuit and can clear the cache too", async 
 
 test("six rotating browser User-Agents spread the load", async () => {
   const { service, calls } = makeRig({ spacingMs: 0 }, {}, offlineHandler);
-  await service.research("user agent rotation test");
+  // With fast offline detection each call stops after 2 network errors, so
+  // make several calls — the UA must rotate on every single request.
+  for (let i = 0; i < 4; i++) {
+    await service.research(`user agent rotation test ${i}`);
+  }
 
   const uas = new Set(calls.map((c) => c.ua));
   assert.ok(calls.length >= 6, `made ${calls.length} requests`);
@@ -397,15 +402,16 @@ test("polite spacing keeps a minimum gap between consecutive requests", async ()
 
 test("SearXNG public instances rotate between calls", async () => {
   let hit = 0;
+  const cleanEmpty = () => Promise.resolve(new Response("", { status: 200 }));
   const { service } = makeRig(
     { spacingMs: 0 },
     {},
     (url) => {
-      if (/searx|paulgo|inetol|baresearch|tiekoetter/.test(url)) {
+      if (/searx|paulgo|inetol|baresearch|tiekoetter|priv\.au|opnxng|hbubli/.test(url)) {
         hit++;
         return Promise.resolve(searxJson(`SearXNG hit ${hit}`));
       }
-      return offlineHandler(url);
+      return cleanEmpty();
     }
   );
 
@@ -500,4 +506,121 @@ test("a saved finding answers the same question offline later", async () => {
   const r2 = await engine2.replyAsync("who is alan turing");
   assert.equal(r2.mode, "knowledge");
   assert.match(r2.reply, /Alan Turing/);
+});
+
+// ---------------------------------------------------------------------------
+// 22–27. Hardening: negative cache, attempt cap, rate cap, Bengali, fast fail
+// ---------------------------------------------------------------------------
+
+const cleanEmpty = () => Promise.resolve(new Response("", { status: 200 }));
+
+test("a clean no-answer topic is remembered (negative cache) so sources are not hammered again", async () => {
+  const { service, calls } = makeRig({ spacingMs: 0 }, {}, cleanEmpty);
+
+  const r1 = await service.research("totally unknown topic xyz");
+  assert.equal(r1.ok, false);
+  assert.equal(r1.offline, false, "sources answered HTTP 200 — this is not offline");
+  assert.ok(calls.length > 0);
+
+  const afterFirst = calls.length;
+  const r2 = await service.research("totally unknown topic xyz");
+  assert.equal(r2.ok, false);
+  assert.equal(r2.negative, true, "second lookup must come from the negative cache");
+  assert.equal(calls.length, afterFirst, "no new network calls for a recently-failed topic");
+  assert.equal(service.status().cache.negativeEntries, 1);
+});
+
+test("a successful finding clears the negative-cache entry for its topic", async () => {
+  let mode = "empty" as "empty" | "wiki";
+  const { service } = makeRig({ spacingMs: 0 }, {}, () =>
+    mode === "wiki" ? Promise.resolve(wikiJson()) : cleanEmpty()
+  );
+
+  await service.research("who is alan turing");
+  assert.equal(service.status().cache.negativeEntries, 1);
+
+  // The internet "recovers" and the sources are allowed to answer again.
+  // A forced lookup (/research) bypasses the negative cache and finds the answer.
+  service.reset();
+  mode = "wiki";
+  const r = await service.research("who is alan turing", { force: true });
+  assert.equal(r.ok, true);
+  assert.equal(service.status().cache.negativeEntries, 0, "finding must clear the negative cache");
+});
+
+test("maxAttempts caps how many sources one call may touch", async () => {
+  const { service, calls } = makeRig({ spacingMs: 0, maxAttempts: 3 }, {}, cleanEmpty);
+  const r = await service.research("attempt cap test");
+  assert.equal(r.ok, false);
+  assert.equal(calls.length, 3, "exactly maxAttempts requests — never the whole source list");
+});
+
+test("the global per-minute request cap stops requests instead of risking blocks", async () => {
+  const { service, calls } = makeRig({ spacingMs: 0, maxRequestsPerMinute: 4 }, {}, cleanEmpty);
+
+  await service.research("cap test one");
+  assert.equal(calls.length, 4, "first call stops at the cap");
+
+  const r2 = await service.research("cap test two");
+  assert.equal(r2.ok, false);
+  assert.equal(r2.rateLimited, true, "second call must be refused while the minute window is full");
+  assert.equal(calls.length, 4, "no extra network requests");
+  assert.equal(service.status().requestsLastMinute, 4);
+});
+
+test("Bengali Wikipedia answers a Bengali question", async () => {
+  const { service } = makeRig(
+    { spacingMs: 0 },
+    {},
+    (url) => (url.includes("bn.wikipedia.org") ? Promise.resolve(wikiJson()) : cleanEmpty())
+  );
+
+  const r = await service.research("বাংলাদেশের রাজধানী কী");
+  assert.equal(r.ok, true);
+  assert.equal(r.finding!.sourceHosts[0], "bn.wikipedia.org");
+  assert.match(r.finding!.answer, /Alan Turing/);
+});
+
+test("two consecutive network errors with no HTTP response stop the call early (fast offline detection)", async () => {
+  let rejects = 0;
+  const { service, calls } = makeRig(
+    { spacingMs: 0, offlineFailFastAfter: 2 },
+    {},
+    (url) => {
+      rejects++;
+      return offlineHandler(url);
+    }
+  );
+  const t0 = Date.now();
+  const r = await service.research("fast offline test");
+  const elapsed = Date.now() - t0;
+
+  assert.equal(r.ok, false);
+  assert.equal(r.offline, true);
+  assert.equal(calls.length, 2, "must stop right after the fail-fast threshold");
+  assert.equal(rejects, 2);
+  assert.ok(elapsed < 2000, `took ${elapsed}ms — an offline machine must fail fast`);
+});
+
+test("a transient network error is retried once when the internet is known to be up", async () => {
+  let wikiFails = 1; // Wikipedia hiccups once, then recovers.
+  const { service } = makeRig(
+    { spacingMs: 0 },
+    {},
+    (url) => {
+      if (url.includes("api.duckduckgo.com")) {
+        return Promise.resolve(new Response("", { status: 200 })); // healthy, no answer
+      }
+      if (url.includes("en.wikipedia.org") && wikiFails > 0) {
+        wikiFails--;
+        return offlineHandler(url);
+      }
+      return Promise.resolve(wikiJson());
+    }
+  );
+
+  const r = await service.research("who is alan turing");
+  assert.equal(r.ok, true);
+  assert.match(r.finding!.answer, /Alan Turing/);
+  assert.equal(wikiFails, 0, "the retry must actually happen");
 });

@@ -9,6 +9,9 @@ import { ResearchService } from "./server/research/research.ts";
 import { openDatabase, resolveDbPath, SNAPSHOT_TABLES } from "./server/db.ts";
 import { buildSnapshot, serializeSnapshot } from "./server/snapshot.ts";
 import { CloudSync, parseBool } from "./server/cloud-sync.ts";
+import { pushLog, recentLogs } from "./server/logs.ts";
+import { createAdminGate, adminTokenFrom } from "./server/auth.ts";
+import { datasetStats } from "./server/dataset.ts";
 
 // Initialize express app
 const app = express();
@@ -16,6 +19,35 @@ const PORT = Number(process.env.PORT) || 3000;
 
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
+
+// Request log — feeds the control panel's Activity/Logs page.
+app.use((req, res, next) => {
+  const t0 = Date.now();
+  res.on("finish", () => {
+    pushLog(res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warn" : "info", "http", `${req.method} ${req.originalUrl} → ${res.statusCode} (${Date.now() - t0}ms)`);
+  });
+  next();
+});
+
+// Admin gate — when ADMIN_PASSWORD is set, training and data-writing
+// endpoints require the `x-admin-token` header. Unset ⇒ single-user panel.
+const adminGate = createAdminGate(process.env.ADMIN_PASSWORD);
+
+/** Log bridge: console for Render, ring buffer for the control panel. */
+const systemLogger = {
+  log: (msg: string) => {
+    console.log(msg);
+    pushLog("info", "system", msg);
+  },
+  warn: (msg: string) => {
+    console.warn(msg);
+    pushLog("warn", "system", msg);
+  },
+  error: (msg: string) => {
+    console.error(msg);
+    pushLog("error", "system", msg);
+  },
+};
 
 // Initialize SQLite Database (temporary cache — Telegram is the source of truth)
 const dbPath = resolveDbPath(process.env.DATABASE_URL);
@@ -49,6 +81,7 @@ const cloud = new CloudSync({
   autoSnapshot: parseBool(process.env.TELEGRAM_AUTO_SNAPSHOT, true),
   restoreOnEmptyOnly: parseBool(process.env.TELEGRAM_RESTORE_ON_EMPTY_ONLY, true),
   snapshotIntervalMinutes: Number(process.env.TELEGRAM_SNAPSHOT_INTERVAL_MINUTES) || 30,
+  logger: systemLogger,
 });
 
 // Memory learned during a chat and the retrained model are mirrored too, so
@@ -59,10 +92,12 @@ ai.setHooks({
 });
 
 // ---------------------------------------------------------------------------
-// Online research — 7 free, keyless sources with per-host circuit breakers,
-// a permanent cache and a hard time budget. Every fresh finding is saved into
-// `knowledge`, so it is mirrored to Telegram and survives Render restarts.
-// All four env vars are optional and non-secret (see .env.example).
+// Online research — free, keyless sources with per-host circuit breakers,
+// a permanent cache, a negative cache, hard attempt/time budgets and a
+// global per-minute request cap, so automatic lookups can never get the app
+// "blocked". Every fresh finding is saved into `knowledge`, so it is mirrored
+// to Telegram and survives Render restarts.
+// All env vars are optional and non-secret (see .env.example).
 // ---------------------------------------------------------------------------
 const research = new ResearchService(
   db,
@@ -71,6 +106,12 @@ const research = new ResearchService(
     cacheTtlMinutes: Number(process.env.RESEARCH_CACHE_TTL_MINUTES) || 360,
     timeoutMs: Number(process.env.RESEARCH_TIMEOUT_MS) || 4000,
     saveToKnowledge: parseBool(process.env.RESEARCH_SAVE_TO_KNOWLEDGE, true),
+    maxAttempts: Number(process.env.RESEARCH_MAX_ATTEMPTS) || 8,
+    maxRequestsPerMinute: Number(process.env.RESEARCH_MAX_REQUESTS_PER_MINUTE) || 60,
+    logger: (msg) => {
+      console.log(msg);
+      pushLog("info", "research", msg);
+    },
   },
   {
     onKnowledgeSave: (row) => cloud.mirror("knowledge", row.id, row),
@@ -125,14 +166,14 @@ async function handleTelegramMessage(msg: TelegramMessage): Promise<string> {
   const sid = conv.id;
 
   // Persist the user's message.
-  const um = db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'user', ?)").run(sid, text);
+  const um = db.prepare("INSERT INTO chat_messages (session_id, role, content, source) VALUES (?, 'user', ?, 'telegram')").run(sid, text);
   tryMirror("chat_messages", um.lastInsertRowid, { id: um.lastInsertRowid, session_id: sid, role: "user", content: text, source: "telegram" });
 
   // Get the AI's reply (brain first, keyless online research if needed).
   const result = await ai.replyAsync(text);
 
   // Persist the AI's reply.
-  const am = db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'ai', ?)").run(sid, result.reply);
+  const am = db.prepare("INSERT INTO chat_messages (session_id, role, content, source) VALUES (?, 'ai', ?, 'telegram')").run(sid, result.reply);
   tryMirror("chat_messages", am.lastInsertRowid, { id: am.lastInsertRowid, session_id: sid, role: "ai", content: result.reply, source: "telegram" });
 
   return result.reply;
@@ -167,6 +208,17 @@ function blockWhileRestoring(req: express.Request, res: express.Response): boole
     res.status(503).json({ error: "AI data is being restored", state: "restoring" });
     return true;
   }
+  return false;
+}
+
+/**
+ * Guard for training / write endpoints: when ADMIN_PASSWORD is configured,
+ * the request must carry the correct `x-admin-token` header.
+ */
+function requireAdmin(req: express.Request, res: express.Response): boolean {
+  if (!adminGate.required) return true;
+  if (adminGate.check(adminTokenFrom(req))) return true;
+  res.status(401).json({ error: "Admin password required", code: "admin_required" });
   return false;
 }
 
@@ -243,6 +295,7 @@ app.post("/api/v1/telegram/verify", async (req, res) => {
 
 /** Push every local record (users, conversations, messages) to Telegram. */
 app.post("/api/v1/telegram/sync", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
   try {
     if (!telegram.configured) {
       return res.status(400).json({ success: false, error: "Telegram not configured." });
@@ -269,6 +322,7 @@ app.post("/api/v1/telegram/sync", async (req, res) => {
 
 /** Create a full gzipped JSON snapshot and upload it to the Telegram channel. */
 app.post("/api/v1/telegram/snapshot", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
   try {
     if (!telegram.configured) {
       return res.status(400).json({ success: false, error: "Telegram not configured." });
@@ -323,6 +377,7 @@ app.get("/api/v1/telegram/snapshots", (req, res) => {
 
 /** Restore the database from a Telegram snapshot (by fileId, or the pinned latest one). */
 app.post("/api/v1/telegram/restore", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
   try {
     if (!telegram.configured) {
       return res.status(400).json({ success: false, error: "Telegram not configured." });
@@ -359,6 +414,7 @@ app.post("/api/v1/telegram/restore", async (req, res) => {
 
 /** Raw DB file backup to Telegram (kept for compatibility). */
 app.post("/api/v1/backup", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
   try {
     if (!fs.existsSync(dbPath)) {
       return res.status(400).json({ success: false, error: "Database file does not exist yet." });
@@ -374,6 +430,7 @@ app.post("/api/v1/backup", async (req, res) => {
 });
 
 app.post("/api/v1/users/seed", (req, res) => {
+  if (!requireAdmin(req, res)) return;
   try {
     const info = db
       .prepare("INSERT INTO users (name, email) VALUES ('Admin User', 'admin@myai.local')")
@@ -426,14 +483,28 @@ app.get("/api/v1/chats/:id/messages", (req, res) => {
 
 app.post("/api/v1/chats/:id/messages", (req, res) => {
   if (blockWhileRestoring(req, res)) return;
-  const { role, content } = req.body;
+  const { role, content, source } = req.body;
   try {
     const info = db
-      .prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)")
-      .run(req.params.id, role, content);
-    const msg = { id: info.lastInsertRowid, session_id: req.params.id, role, content };
+      .prepare("INSERT INTO chat_messages (session_id, role, content, source) VALUES (?, ?, ?, ?)")
+      .run(req.params.id, role, content, source || "web");
+    const msg = { id: info.lastInsertRowid, session_id: req.params.id, role, content, source: source || "web" };
     tryMirror("chat_messages", info.lastInsertRowid, msg);
     res.json({ success: true, id: info.lastInsertRowid });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** Delete a conversation and every message inside it (admin action). */
+app.delete("/api/v1/chats/:id", (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
+  if (!requireAdmin(req, res)) return;
+  try {
+    db.prepare("DELETE FROM conversations WHERE id = ?").run(req.params.id);
+    tryMirrorDelete("conversations", req.params.id);
+    pushLog("info", "system", `Conversation #${req.params.id} deleted`);
+    res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -447,10 +518,14 @@ app.post("/api/v1/chats/:id/messages", (req, res) => {
 app.post("/api/v1/ai/chat", async (req, res) => {
   if (blockWhileRestoring(req, res)) return;
   try {
-    const { sessionId, message } = req.body || {};
+    const { sessionId, message, training } = req.body || {};
     if (!message || typeof message !== "string" || !message.trim()) {
       return res.status(400).json({ error: "message is required" });
     }
+    // Messages typed in the Training tab are stored as training data too —
+    // with their own source label so the Datasets page can show where each
+    // training example came from.
+    const source = training ? "training" : "web";
 
     let sid: number | null = sessionId ? Number(sessionId) : null;
     if (!sid) {
@@ -460,13 +535,13 @@ app.post("/api/v1/ai/chat", async (req, res) => {
       tryMirror("conversations", sid, { id: sid, title });
     }
 
-    const um = db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'user', ?)").run(sid, message.trim());
-    tryMirror("chat_messages", um.lastInsertRowid, { id: um.lastInsertRowid, session_id: sid, role: "user", content: message.trim() });
+    const um = db.prepare("INSERT INTO chat_messages (session_id, role, content, source) VALUES (?, 'user', ?, ?)").run(sid, message.trim(), source);
+    tryMirror("chat_messages", um.lastInsertRowid, { id: um.lastInsertRowid, session_id: sid, role: "user", content: message.trim(), source });
 
     const result = await ai.replyAsync(message.trim());
 
-    const am = db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'ai', ?)").run(sid, result.reply);
-    tryMirror("chat_messages", am.lastInsertRowid, { id: am.lastInsertRowid, session_id: sid, role: "ai", content: result.reply });
+    const am = db.prepare("INSERT INTO chat_messages (session_id, role, content, source) VALUES (?, 'ai', ?, ?)").run(sid, result.reply, source);
+    tryMirror("chat_messages", am.lastInsertRowid, { id: am.lastInsertRowid, session_id: sid, role: "ai", content: result.reply, source });
 
     res.json({ sessionId: sid, reply: result.reply, mode: result.mode });
   } catch (err: any) {
@@ -476,6 +551,7 @@ app.post("/api/v1/ai/chat", async (req, res) => {
 
 app.post("/api/v1/ai/train", (req, res) => {
   if (blockWhileRestoring(req, res)) return;
+  if (!requireAdmin(req, res)) return;
   try {
     const stats = ai.train();
     // The trained model lives in `ai_model` — mirror it so it is never lost.
@@ -510,6 +586,7 @@ app.get("/api/v1/knowledge", (req, res) => {
 
 app.post("/api/v1/knowledge", (req, res) => {
   if (blockWhileRestoring(req, res)) return;
+  if (!requireAdmin(req, res)) return;
   const { title, content } = req.body || {};
   if (!content || typeof content !== "string" || !content.trim()) {
     return res.status(400).json({ error: "content is required" });
@@ -525,6 +602,7 @@ app.post("/api/v1/knowledge", (req, res) => {
 
 app.delete("/api/v1/knowledge/:id", (req, res) => {
   if (blockWhileRestoring(req, res)) return;
+  if (!requireAdmin(req, res)) return;
   try {
     db.prepare("DELETE FROM knowledge WHERE id = ?").run(req.params.id);
     tryMirrorDelete("knowledge", req.params.id);
@@ -545,6 +623,7 @@ app.get("/api/v1/memory", (req, res) => {
 
 app.post("/api/v1/memory", (req, res) => {
   if (blockWhileRestoring(req, res)) return;
+  if (!requireAdmin(req, res)) return;
   const { key, value } = req.body || {};
   if (!key || !value) return res.status(400).json({ error: "key and value are required" });
   try {
@@ -559,6 +638,7 @@ app.post("/api/v1/memory", (req, res) => {
 
 app.delete("/api/v1/memory/:id", (req, res) => {
   if (blockWhileRestoring(req, res)) return;
+  if (!requireAdmin(req, res)) return;
   try {
     db.prepare("DELETE FROM memory WHERE id = ?").run(req.params.id);
     tryMirrorDelete("memory", req.params.id);
@@ -606,6 +686,7 @@ app.post("/api/v1/research", async (req, res) => {
 
 /** Reset every circuit breaker (the "Reset Cooldowns" button), optionally the cache too. */
 app.post("/api/v1/research/reset", (req, res) => {
+  if (!requireAdmin(req, res)) return;
   try {
     const clearCache = req.body?.clearCache === true;
     const result = research.reset(clearCache);
@@ -618,6 +699,112 @@ app.post("/api/v1/research/reset", (req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Control panel support — auth, logs, settings, datasets, users.
+// Every endpoint here is read-only except where requireAdmin is applied.
+// ---------------------------------------------------------------------------
+
+/** Is an admin password configured? (The UI shows a password prompt when yes.) */
+app.get("/api/v1/auth/status", (req, res) => {
+  res.json({
+    passwordRequired: adminGate.required,
+    adminAuthed: adminGate.check(adminTokenFrom(req)),
+  });
+});
+
+/** Verify an admin password client-side (stateless — the token lives in the browser session). */
+app.post("/api/v1/auth/verify", (req, res) => {
+  const { password } = req.body || {};
+  if (!adminGate.required) return res.json({ ok: true, message: "No admin password configured." });
+  if (adminGate.check(String(password ?? ""))) {
+    return res.json({ ok: true, message: "Password accepted." });
+  }
+  res.status(401).json({ ok: false, error: "Wrong password." });
+});
+
+/** Recent activity log (in-memory ring buffer — no secrets are ever logged). */
+app.get("/api/v1/logs", (req, res) => {
+  const n = Math.min(Number(req.query.n) || 200, 500);
+  res.json({ entries: recentLogs(n) });
+});
+
+/** Non-secret runtime settings — what the control panel's Settings page shows. */
+app.get("/api/v1/settings", (req, res) => {
+  res.json({
+    adminPasswordRequired: adminGate.required,
+    telegram: {
+      configured: telegram.configured,
+      botTokenSet: Boolean(process.env.TELEGRAM_BOT_TOKEN),
+      storageChatIdSet: Boolean(process.env.TELEGRAM_STORAGE_CHAT_ID),
+      autoRestore: parseBool(process.env.TELEGRAM_AUTO_RESTORE, true),
+      autoSnapshot: parseBool(process.env.TELEGRAM_AUTO_SNAPSHOT, true),
+      restoreOnEmptyOnly: parseBool(process.env.TELEGRAM_RESTORE_ON_EMPTY_ONLY, true),
+      snapshotIntervalMinutes: Number(process.env.TELEGRAM_SNAPSHOT_INTERVAL_MINUTES) || 30,
+      botRunning: Boolean(telegramBot),
+    },
+    research: {
+      enabled: research.enabled,
+      cacheTtlMinutes: Number(process.env.RESEARCH_CACHE_TTL_MINUTES) || 360,
+      timeoutMs: Number(process.env.RESEARCH_TIMEOUT_MS) || 4000,
+      saveToKnowledge: parseBool(process.env.RESEARCH_SAVE_TO_KNOWLEDGE, true),
+      maxAttempts: Number(process.env.RESEARCH_MAX_ATTEMPTS) || 8,
+      maxRequestsPerMinute: Number(process.env.RESEARCH_MAX_REQUESTS_PER_MINUTE) || 60,
+    },
+    database: dbPath,
+    port: PORT,
+    cloudState: cloud.getState(),
+  });
+});
+
+/** Dataset statistics — where every training example comes from. */
+app.get("/api/v1/dataset/stats", (req, res) => {
+  try {
+    res.json(datasetStats(db));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** All users. */
+app.get("/api/v1/users", (req, res) => {
+  try {
+    res.json(db.prepare("SELECT * FROM users ORDER BY id DESC").all());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** Create a user. */
+app.post("/api/v1/users", (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
+  if (!requireAdmin(req, res)) return;
+  const { name, email } = req.body || {};
+  if (!name || !email) return res.status(400).json({ error: "name and email are required" });
+  try {
+    const info = db.prepare("INSERT INTO users (name, email) VALUES (?, ?)").run(name, email);
+    tryMirror("users", info.lastInsertRowid, { id: info.lastInsertRowid, name, email });
+    res.json({ success: true, id: Number(info.lastInsertRowid) });
+  } catch (err: any) {
+    if (err.message && err.message.includes("UNIQUE constraint failed")) {
+      return res.status(409).json({ error: "A user with this email already exists." });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** Delete a user. */
+app.delete("/api/v1/users/:id", (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
+  if (!requireAdmin(req, res)) return;
+  try {
+    db.prepare("DELETE FROM users WHERE id = ?").run(req.params.id);
+    tryMirrorDelete("users", req.params.id);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -679,6 +866,7 @@ async function startServer() {
   // AFTER the restore has finished.
   // -------------------------------------------------------------------------
   console.log("🚀 Application state: starting");
+  pushLog("info", "system", "🚀 Application state: starting");
   try {
     await cloud.runStartupRestore();
     // The Markov model may have just been restored from the channel.
@@ -687,6 +875,7 @@ async function startServer() {
     console.error("❌ Startup restore crashed (continuing with local data):", err?.message || err);
   }
   console.log(`🚀 Application state: ${cloud.getState()}`);
+  pushLog("info", "system", `🚀 Application state: ${cloud.getState()}`);
 
   if (cloud.getState() === "restore_failed") {
     console.error(
@@ -697,7 +886,10 @@ async function startServer() {
     cloud.markReady();
     // Long-polling starts only once the app is ready.
     if (telegramBot) {
-      telegramBot.start().catch((err) => console.error("Failed to start Telegram bot:", err.message));
+      telegramBot
+        .start()
+        .then(() => pushLog("info", "system", "🤖 Telegram bot long-polling started"))
+        .catch((err) => console.error("Failed to start Telegram bot:", err.message));
     }
     cloud.startAutoSnapshot();
   }
