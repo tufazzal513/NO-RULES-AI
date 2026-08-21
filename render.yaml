@@ -29,7 +29,7 @@ services:
         value: "true"
       - key: TELEGRAM_SNAPSHOT_INTERVAL_MINUTES
         value: "30"
-      # Online research — 7 free keyless sources. Optional, non-secret, safe
+      # Online research — 17 free keyless sources. Optional, non-secret, safe
       # defaults; omit them to keep the defaults.
       - key: RESEARCH_ENABLED
         value: "true"
@@ -39,3 +39,11 @@ services:
         value: "4000"
       - key: RESEARCH_SAVE_TO_KNOWLEDGE
         value: "true"
+      - key: RESEARCH_MAX_ATTEMPTS
+        value: "8"
+      - key: RESEARCH_MAX_REQUESTS_PER_MINUTE
+        value: "60"
+      # Optional admin password (secret — set in Render, never commit).
+      # When set, Training + write actions require it from the web UI.
+      - key: ADMIN_PASSWORD
+        sync: false

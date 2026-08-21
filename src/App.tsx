@@ -473,6 +473,12 @@ export default function App() {
     }
   };
 
+  // Load the conversation whenever the active session changes.
+  useEffect(() => {
+    loadMessages(activeId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId]);
+
   const sendMain = async (text?: string) => {
     const msg = (text ?? chatInput).trim();
     if (!msg || isTyping) return;
@@ -1507,7 +1513,10 @@ export default function App() {
 
           {/* New chat pill */}
           <button
-            onClick={() => selectTab("chat")}
+            onClick={() => {
+              newChat();
+              selectTab("chat");
+            }}
             className="mt-4 w-full flex items-center gap-2.5 bg-[#d3e3fd] hover:bg-[#c2d8fb] text-[#041e49] rounded-full px-4 py-2.5 text-[14px] font-medium transition-colors"
           >
             <Plus size={18} strokeWidth={2.5} />
