@@ -2634,7 +2634,7 @@ export default function App() {
                   setConfirmClear(false);
                   void clearAllChats();
                 }}
-                className="flex-1 py-2.5 bg-[#f28b82] hover:bg-[#d93025] text-white rounded-xl text-[13px] font-medium transition-colors"
+                className="flex-1 py-2.5 bg-[#d93025] hover:bg-[#e0453a] text-white rounded-xl text-[13px] font-medium transition-colors"
               >
                 Delete all
               </button>
