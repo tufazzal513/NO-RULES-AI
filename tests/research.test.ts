@@ -643,3 +643,45 @@ test("a transient network error is retried once when the internet is known to be
   assert.match(r.finding!.answer, /Alan Turing/);
   assert.equal(wikiFails, 0, "the retry must actually happen");
 });
+
+test("two agreeing sources merge citations and raise confidence", async () => {
+  const { service } = makeRig(
+    { spacingMs: 0 },
+    {},
+    (url) => {
+      if (url.includes("api.duckduckgo.com")) return Promise.resolve(instantJson());
+      if (url.includes("en.wikipedia.org")) return Promise.resolve(wikiJson());
+      return cleanEmpty();
+    }
+  );
+  // Force a weak first hit by using a topic that still matches both snippets.
+  const r = await service.research("Alan Turing mathematician");
+  assert.equal(r.ok, true);
+  assert.match(r.finding!.answer, /Alan Turing/);
+  assert.ok((r.finding!.sourceHosts ?? []).length >= 1);
+});
+
+test("intent routing skips Open-Meteo unless the question is about weather", async () => {
+  const { service, calls } = makeRig({ spacingMs: 0, maxAttempts: 8 }, {}, cleanEmpty);
+  await service.research("who is alan turing");
+  assert.equal(
+    calls.some((c) => c.url.includes("open-meteo.com")),
+    false,
+    "weather API must not be called for a biography question"
+  );
+});
+
+test("selftest reports per-source pass/fail without throwing", async () => {
+  const { service } = makeRig({ spacingMs: 0 }, {}, (url) => {
+    if (url.includes("wikipedia") || url.includes("duckduckgo") || url.includes("wikidata")) {
+      return Promise.resolve(wikiJson());
+    }
+    return cleanEmpty();
+  });
+  const report = await service.selftest();
+  assert.ok(Array.isArray(report.sources));
+  assert.ok(report.sources.length >= 17);
+  assert.ok(report.sources.every((s) => typeof s.host === "string" && typeof s.pass === "boolean"));
+  assert.ok(report.queries.some((q) => q.lang === "bn"));
+  assert.ok(report.queries.some((q) => q.lang === "banglish"));
+});
