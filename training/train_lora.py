@@ -108,7 +108,11 @@ def main():
         random_state=42,
     )
 
-    tokenizer.chat_template = CHAT_TEMPLATE
+    # Keep the model's native chat template when it has one (Sarvam-1 uses
+    # [INST]...[/INST], Qwen/Gemma have their own). Only fall back to the
+    # generic template when the tokenizer ships without one.
+    if not getattr(tokenizer, "chat_template", None):
+        tokenizer.chat_template = CHAT_TEMPLATE
     train_ds, val_ds = load_dataset(args.train, args.val, FastLanguageModel, torch, Dataset)
 
     def formatting(examples):
