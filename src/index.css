@@ -15,6 +15,25 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* ------------------------------------------------------------------ */
+/* Visible text selection highlight (dark theme)                        */
+/* Default browser selection was nearly invisible on the dark surface.  */
+/* ------------------------------------------------------------------ */
+::selection {
+  background: rgba(138, 180, 248, 0.45); /* Gemini blue, clearly visible */
+  color: #ffffff;
+}
+::-moz-selection {
+  background: rgba(138, 180, 248, 0.45);
+  color: #ffffff;
+}
+/* Inputs / textareas get the same treatment so composing text highlights too */
+input::selection,
+textarea::selection {
+  background: rgba(138, 180, 248, 0.55);
+  color: #ffffff;
+}
+
 /* Thin, subtle scrollbars (Google dark style) */
 *::-webkit-scrollbar {
   width: 8px;
