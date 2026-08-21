@@ -1,0 +1,191 @@
+{"messages": [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "Hello! I'm your personal AI. How can I help you today?"}]}
+{"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "Hi! You can write English, বাংলা or Banglish."}]}
+{"messages": [{"role": "user", "content": "hey"}, {"role": "assistant", "content": "Hey! What's on your mind?"}]}
+{"messages": [{"role": "user", "content": "good morning"}, {"role": "assistant", "content": "Good morning! Hope you have a good day."}]}
+{"messages": [{"role": "user", "content": "good night"}, {"role": "assistant", "content": "Good night. Rest well."}]}
+{"messages": [{"role": "user", "content": "how are you"}, {"role": "assistant", "content": "I'm well — running on your own server. How are you?"}]}
+{"messages": [{"role": "user", "content": "who are you"}, {"role": "assistant", "content": "I'm MY-AI, your self-hosted assistant. No company API."}]}
+{"messages": [{"role": "user", "content": "thank you"}, {"role": "assistant", "content": "You're welcome."}]}
+{"messages": [{"role": "user", "content": "thanks"}, {"role": "assistant", "content": "Glad I could help."}]}
+{"messages": [{"role": "user", "content": "হাই"}, {"role": "assistant", "content": "আসসালামু আলাইকুম! আমি আপনার নিজের AI। কী সাহায্য করতে পারি?"}]}
+{"messages": [{"role": "user", "content": "হ্যালো"}, {"role": "assistant", "content": "হ্যালো! বাংলা, ইংরেজি বা Banglish — যেভাবে খুশি লিখুন।"}]}
+{"messages": [{"role": "user", "content": "কেমন আছো"}, {"role": "assistant", "content": "ভালো আছি, ধন্যবাদ। আপনি কেমন আছেন?"}]}
+{"messages": [{"role": "user", "content": "কেমন আছেন"}, {"role": "assistant", "content": "আমি ভালো আছি। আপনার কী জানার আছে?"}]}
+{"messages": [{"role": "user", "content": "তুমি কে"}, {"role": "assistant", "content": "আমি MY-AI — আপনার সার্ভারে চলা পার্সোনাল অ্যাসিস্ট্যান্ট।"}]}
+{"messages": [{"role": "user", "content": "ধন্যবাদ"}, {"role": "assistant", "content": "আপনাকেও ধন্যবাদ। আর কিছু লাগলে বলুন।"}]}
+{"messages": [{"role": "user", "content": "শুভ সকাল"}, {"role": "assistant", "content": "শুভ সকাল! আজকের দিনটা ভালো কাটুক।"}]}
+{"messages": [{"role": "user", "content": "শুভ রাত্রি"}, {"role": "assistant", "content": "শুভ রাত্রি। আরাম করে ঘুমান।"}]}
+{"messages": [{"role": "user", "content": "assalamualaikum"}, {"role": "assistant", "content": "Wa alaikum assalam. Ami apnar nijer AI. Kemon achhen?"}]}
+{"messages": [{"role": "user", "content": "kemon acho"}, {"role": "assistant", "content": "Bhalo achi. Apni kemon acho?"}]}
+{"messages": [{"role": "user", "content": "tumi ke"}, {"role": "assistant", "content": "Ami MY-AI — apnar nijer server e choli."}]}
+{"messages": [{"role": "user", "content": "dhonnobad"}, {"role": "assistant", "content": "Welcome. Aro kichu lagle bolun."}]}
+{"messages": [{"role": "user", "content": "what is the capital of Bangladesh"}, {"role": "assistant", "content": "Dhaka is the capital of Bangladesh."}]}
+{"messages": [{"role": "user", "content": "বাংলাদেশের রাজধানী কী"}, {"role": "assistant", "content": "বাংলাদেশের রাজধানী ঢাকা।"}]}
+{"messages": [{"role": "user", "content": "bangladesher rajdhani ki"}, {"role": "assistant", "content": "Bangladesher rajdhani Dhaka."}]}
+{"messages": [{"role": "user", "content": "বাংলাদেশের ভাষা কী"}, {"role": "assistant", "content": "বাংলাদেশের রাষ্ট্রভাষা বাংলা।"}]}
+{"messages": [{"role": "user", "content": "bangladesher vasha ki"}, {"role": "assistant", "content": "Rashtrobhasha Bangla."}]}
+{"messages": [{"role": "user", "content": "what currency does Bangladesh use"}, {"role": "assistant", "content": "Bangladesh uses the Taka (BDT, ৳)."}]}
+{"messages": [{"role": "user", "content": "বাংলাদেশের মুদ্রা কী"}, {"role": "assistant", "content": "বাংলাদেশের মুদ্রা টাকা (BDT)।"}]}
+{"messages": [{"role": "user", "content": "where is cox's bazar"}, {"role": "assistant", "content": "Cox's Bazar is in south-east Bangladesh, famous for a very long sea beach."}]}
+{"messages": [{"role": "user", "content": "কক্সবাজার কোথায়"}, {"role": "assistant", "content": "কক্সবাজার বাংলাদেশের দক্ষিণ-পূর্বে, দীর্ঘ সমুদ্র সৈকতের জন্য বিখ্যাত।"}]}
+{"messages": [{"role": "user", "content": "sundarban ki"}, {"role": "assistant", "content": "Sundarban world er sobcheye boro mangrove forest. Royal Bengal Tiger er bas."}]}
+{"messages": [{"role": "user", "content": "সুন্দরবন কী"}, {"role": "assistant", "content": "সুন্দরবন পৃথিবীর সবচেয়ে বড় ম্যানগ্রোভ বন। রয়েল বেঙ্গল টাইগারের বাস এখানে।"}]}
+{"messages": [{"role": "user", "content": "padma setu"}, {"role": "assistant", "content": "Padma Bridge connects Munshiganj with Shariatpur/Madaripur across the Padma."}]}
+{"messages": [{"role": "user", "content": "পদ্মা সেতু"}, {"role": "assistant", "content": "পদ্মা সেতু পদ্মা নদীর উপর মুন্সিগঞ্জকে শরিয়তপুর/মাদারীপুরের সাথে যুক্ত করে।"}]}
+{"messages": [{"role": "user", "content": "ekushe february"}, {"role": "assistant", "content": "21 February is International Mother Language Day, from the 1952 language movement."}]}
+{"messages": [{"role": "user", "content": "একুশে ফেব্রুয়ারি"}, {"role": "assistant", "content": "একুশে ফেব্রুয়ারি আন্তর্জাতিক মাতৃভাষা দিবস — ১৯৫২ সালের ভাষা আন্দোলন।"}]}
+{"messages": [{"role": "user", "content": "26 march"}, {"role": "assistant", "content": "26 March is Bangladesh Independence Day."}]}
+{"messages": [{"role": "user", "content": "১৬ ডিসেম্বর"}, {"role": "assistant", "content": "১৬ ডিসেম্বর বাংলাদেশের বিজয় দিবস (১৯৭১)।"}]}
+{"messages": [{"role": "user", "content": "victory day bangladesh"}, {"role": "assistant", "content": "16 December is Victory Day in Bangladesh (1971)."}]}
+{"messages": [{"role": "user", "content": "dhaka kothay"}, {"role": "assistant", "content": "Dhaka Bangladesher rajdhani, Buriganga nodir kache."}]}
+{"messages": [{"role": "user", "content": "chittagong"}, {"role": "assistant", "content": "Chattogram is Bangladesh's main port city on the Bay of Bengal."}]}
+{"messages": [{"role": "user", "content": "সিলেট"}, {"role": "assistant", "content": "সিলেট উত্তর-পূর্ব বাংলাদেশে, চা-বাগান ও হাওরের জন্য পরিচিত।"}]}
+{"messages": [{"role": "user", "content": "ilish"}, {"role": "assistant", "content": "Ilish (hilsa) is Bangladesh's national fish."}]}
+{"messages": [{"role": "user", "content": "ইলিশ"}, {"role": "assistant", "content": "ইলিশ বাংলাদেশের জাতীয় মাছ।"}]}
+{"messages": [{"role": "user", "content": "what is pohela boishakh"}, {"role": "assistant", "content": "Pohela Boishakh is Bengali New Year, 14 April in Bangladesh."}]}
+{"messages": [{"role": "user", "content": "পহেলা বৈশাখ"}, {"role": "assistant", "content": "পহেলা বৈশাখ বাংলা নববর্ষ — বাংলাদেশে সাধারণত ১৪ এপ্রিল।"}]}
+{"messages": [{"role": "user", "content": "খুলনা"}, {"role": "assistant", "content": "খুলনা দক্ষিণ-পশ্চিম বাংলাদেশের বড় শহর, সুন্দরবনের কাছে।"}]}
+{"messages": [{"role": "user", "content": "রাজশাহী"}, {"role": "assistant", "content": "রাজশাহী উত্তর বাংলাদেশে, রেশম ও আমের জন্য পরিচিত।"}]}
+{"messages": [{"role": "user", "content": "রংপুর"}, {"role": "assistant", "content": "রংপুর উত্তর বাংলাদেশের বিভাগীয় শহর।"}]}
+{"messages": [{"role": "user", "content": "বরিশাল"}, {"role": "assistant", "content": "বরিশাল দক্ষিণাঞ্চলের নদীমাতৃক শহর।"}]}
+{"messages": [{"role": "user", "content": "what's the weather"}, {"role": "assistant", "content": "Try: Dhaka weather today — or /research Dhaka weather."}]}
+{"messages": [{"role": "user", "content": "আবহাওয়া কেমন"}, {"role": "assistant", "content": "শহরের নামসহ জিজ্ঞেস করুন, অথবা /research ঢাকা আবহাওয়া।"}]}
+{"messages": [{"role": "user", "content": "abohawa kemon"}, {"role": "assistant", "content": "Shohor er nam din, jemon: Dhaka weather today."}]}
+{"messages": [{"role": "user", "content": "how to cook rice"}, {"role": "assistant", "content": "Wash rice, about 1:2 rice to water, boil then simmer covered. A rice cooker also works."}]}
+{"messages": [{"role": "user", "content": "ভাত কীভাবে রান্না করব"}, {"role": "assistant", "content": "চাল ধুয়ে নিন। চাল:পানি প্রায় ১:২। ফুটিয়ে ঢেকে সিদ্ধ করুন।"}]}
+{"messages": [{"role": "user", "content": "bhat kivabe ranna"}, {"role": "assistant", "content": "Chal dhuen. Chal:pani 1:2. Futiye dheke siddho korun."}]}
+{"messages": [{"role": "user", "content": "i am hungry"}, {"role": "assistant", "content": "Rice with dal and a vegetable, or khichuri in one pot."}]}
+{"messages": [{"role": "user", "content": "ক্ষুধা লাগছে"}, {"role": "assistant", "content": "ভাত-ডাল-সবজি সহজ। খিচুড়িও ভালো।"}]}
+{"messages": [{"role": "user", "content": "help"}, {"role": "assistant", "content": "Chat, say My name is …, add knowledge, /research a topic, or import more txt files."}]}
+{"messages": [{"role": "user", "content": "সাহায্য"}, {"role": "assistant", "content": "চ্যাট করুন, আমার নাম বলুন, নলেজ যোগ করুন, /research দিন।"}]}
+{"messages": [{"role": "user", "content": "amar nam ki"}, {"role": "assistant", "content": "Apni ekhono nam bolen ni. Amar nam … likhun."}]}
+{"messages": [{"role": "user", "content": "আমার নাম কী"}, {"role": "assistant", "content": "আপনি এখনো নাম বলেননি। আমার নাম … লিখুন।"}]}
+{"messages": [{"role": "user", "content": "what is my name"}, {"role": "assistant", "content": "You haven't told me your name yet. Say My name is …"}]}
+{"messages": [{"role": "user", "content": "how do I train you"}, {"role": "assistant", "content": "Import these files in Training, chat more, or press Train. I retrain in the background."}]}
+{"messages": [{"role": "user", "content": "তোমাকে কীভাবে ট্রেন করব"}, {"role": "assistant", "content": "Training ট্যাবে txt/jsonl ইমপোর্ট করুন। ব্যাকগ্রাউন্ডে ট্রেন হব।"}]}
+{"messages": [{"role": "user", "content": "cricket"}, {"role": "assistant", "content": "Bangladesh cricket is huge. For a live score try /research Bangladesh cricket."}]}
+{"messages": [{"role": "user", "content": "ক্রিকেট"}, {"role": "assistant", "content": "বাংলাদেশে ক্রিকেট খুব জনপ্রিয়। স্কোর চাইলে /research Bangladesh cricket।"}]}
+{"messages": [{"role": "user", "content": "study tips"}, {"role": "assistant", "content": "Short sessions, one topic, write in your own words, sleep enough."}]}
+{"messages": [{"role": "user", "content": "পড়ালেখা"}, {"role": "assistant", "content": "ছোট সেশনে একটা বিষয়। নিজের ভাষায় লিখে নিন।"}]}
+{"messages": [{"role": "user", "content": "how do you say hello in bangla"}, {"role": "assistant", "content": "\"hello\" বাংলায়: হ্যালো / আসসালামু আলাইকুম. Banglish: assalamualaikum."}]}
+{"messages": [{"role": "user", "content": "hello বাংলায় কী"}, {"role": "assistant", "content": "\"hello\" = হ্যালো / আসসালামু আলাইকুম (Banglish: assalamualaikum)"}]}
+{"messages": [{"role": "user", "content": "assalamualaikum mane ki"}, {"role": "assistant", "content": "\"assalamualaikum\" mane \"hello\" / হ্যালো / আসসালামু আলাইকুম."}]}
+{"messages": [{"role": "user", "content": "how do you say how are you in bangla"}, {"role": "assistant", "content": "\"how are you\" বাংলায়: কেমন আছো. Banglish: kemon acho."}]}
+{"messages": [{"role": "user", "content": "how are you বাংলায় কী"}, {"role": "assistant", "content": "\"how are you\" = কেমন আছো (Banglish: kemon acho)"}]}
+{"messages": [{"role": "user", "content": "kemon acho mane ki"}, {"role": "assistant", "content": "\"kemon acho\" mane \"how are you\" / কেমন আছো."}]}
+{"messages": [{"role": "user", "content": "how do you say I am fine in bangla"}, {"role": "assistant", "content": "\"I am fine\" বাংলায়: আমি ভালো আছি. Banglish: ami bhalo achi."}]}
+{"messages": [{"role": "user", "content": "I am fine বাংলায় কী"}, {"role": "assistant", "content": "\"I am fine\" = আমি ভালো আছি (Banglish: ami bhalo achi)"}]}
+{"messages": [{"role": "user", "content": "ami bhalo achi mane ki"}, {"role": "assistant", "content": "\"ami bhalo achi\" mane \"I am fine\" / আমি ভালো আছি."}]}
+{"messages": [{"role": "user", "content": "how do you say thank you in bangla"}, {"role": "assistant", "content": "\"thank you\" বাংলায়: ধন্যবাদ. Banglish: dhonnobad."}]}
+{"messages": [{"role": "user", "content": "thank you বাংলায় কী"}, {"role": "assistant", "content": "\"thank you\" = ধন্যবাদ (Banglish: dhonnobad)"}]}
+{"messages": [{"role": "user", "content": "dhonnobad mane ki"}, {"role": "assistant", "content": "\"dhonnobad\" mane \"thank you\" / ধন্যবাদ."}]}
+{"messages": [{"role": "user", "content": "how do you say yes in bangla"}, {"role": "assistant", "content": "\"yes\" বাংলায়: হ্যাঁ. Banglish: hya."}]}
+{"messages": [{"role": "user", "content": "yes বাংলায় কী"}, {"role": "assistant", "content": "\"yes\" = হ্যাঁ (Banglish: hya)"}]}
+{"messages": [{"role": "user", "content": "hya mane ki"}, {"role": "assistant", "content": "\"hya\" mane \"yes\" / হ্যাঁ."}]}
+{"messages": [{"role": "user", "content": "how do you say no in bangla"}, {"role": "assistant", "content": "\"no\" বাংলায়: না. Banglish: na."}]}
+{"messages": [{"role": "user", "content": "no বাংলায় কী"}, {"role": "assistant", "content": "\"no\" = না (Banglish: na)"}]}
+{"messages": [{"role": "user", "content": "na mane ki"}, {"role": "assistant", "content": "\"na\" mane \"no\" / না."}]}
+{"messages": [{"role": "user", "content": "how do you say please in bangla"}, {"role": "assistant", "content": "\"please\" বাংলায়: দয়া করে. Banglish: doya kore."}]}
+{"messages": [{"role": "user", "content": "please বাংলায় কী"}, {"role": "assistant", "content": "\"please\" = দয়া করে (Banglish: doya kore)"}]}
+{"messages": [{"role": "user", "content": "doya kore mane ki"}, {"role": "assistant", "content": "\"doya kore\" mane \"please\" / দয়া করে."}]}
+{"messages": [{"role": "user", "content": "how do you say sorry in bangla"}, {"role": "assistant", "content": "\"sorry\" বাংলায়: দুঃখিত. Banglish: dukkhito."}]}
+{"messages": [{"role": "user", "content": "sorry বাংলায় কী"}, {"role": "assistant", "content": "\"sorry\" = দুঃখিত (Banglish: dukkhito)"}]}
+{"messages": [{"role": "user", "content": "dukkhito mane ki"}, {"role": "assistant", "content": "\"dukkhito\" mane \"sorry\" / দুঃখিত."}]}
+{"messages": [{"role": "user", "content": "how do you say water in bangla"}, {"role": "assistant", "content": "\"water\" বাংলায়: পানি. Banglish: pani."}]}
+{"messages": [{"role": "user", "content": "water বাংলায় কী"}, {"role": "assistant", "content": "\"water\" = পানি (Banglish: pani)"}]}
+{"messages": [{"role": "user", "content": "pani mane ki"}, {"role": "assistant", "content": "\"pani\" mane \"water\" / পানি."}]}
+{"messages": [{"role": "user", "content": "how do you say rice in bangla"}, {"role": "assistant", "content": "\"rice\" বাংলায়: ভাত. Banglish: bhat."}]}
+{"messages": [{"role": "user", "content": "rice বাংলায় কী"}, {"role": "assistant", "content": "\"rice\" = ভাত (Banglish: bhat)"}]}
+{"messages": [{"role": "user", "content": "bhat mane ki"}, {"role": "assistant", "content": "\"bhat\" mane \"rice\" / ভাত."}]}
+{"messages": [{"role": "user", "content": "how do you say tea in bangla"}, {"role": "assistant", "content": "\"tea\" বাংলায়: চা. Banglish: cha."}]}
+{"messages": [{"role": "user", "content": "tea বাংলায় কী"}, {"role": "assistant", "content": "\"tea\" = চা (Banglish: cha)"}]}
+{"messages": [{"role": "user", "content": "cha mane ki"}, {"role": "assistant", "content": "\"cha\" mane \"tea\" / চা."}]}
+{"messages": [{"role": "user", "content": "how do you say house in bangla"}, {"role": "assistant", "content": "\"house\" বাংলায়: বাড়ি. Banglish: bari."}]}
+{"messages": [{"role": "user", "content": "house বাংলায় কী"}, {"role": "assistant", "content": "\"house\" = বাড়ি (Banglish: bari)"}]}
+{"messages": [{"role": "user", "content": "bari mane ki"}, {"role": "assistant", "content": "\"bari\" mane \"house\" / বাড়ি."}]}
+{"messages": [{"role": "user", "content": "how do you say friend in bangla"}, {"role": "assistant", "content": "\"friend\" বাংলায়: বন্ধু. Banglish: bondhu."}]}
+{"messages": [{"role": "user", "content": "friend বাংলায় কী"}, {"role": "assistant", "content": "\"friend\" = বন্ধু (Banglish: bondhu)"}]}
+{"messages": [{"role": "user", "content": "bondhu mane ki"}, {"role": "assistant", "content": "\"bondhu\" mane \"friend\" / বন্ধু."}]}
+{"messages": [{"role": "user", "content": "how do you say today in bangla"}, {"role": "assistant", "content": "\"today\" বাংলায়: আজ. Banglish: aj."}]}
+{"messages": [{"role": "user", "content": "today বাংলায় কী"}, {"role": "assistant", "content": "\"today\" = আজ (Banglish: aj)"}]}
+{"messages": [{"role": "user", "content": "aj mane ki"}, {"role": "assistant", "content": "\"aj\" mane \"today\" / আজ."}]}
+{"messages": [{"role": "user", "content": "how do you say tomorrow in bangla"}, {"role": "assistant", "content": "\"tomorrow\" বাংলায়: আগামীকাল. Banglish: agamikal."}]}
+{"messages": [{"role": "user", "content": "tomorrow বাংলায় কী"}, {"role": "assistant", "content": "\"tomorrow\" = আগামীকাল (Banglish: agamikal)"}]}
+{"messages": [{"role": "user", "content": "agamikal mane ki"}, {"role": "assistant", "content": "\"agamikal\" mane \"tomorrow\" / আগামীকাল."}]}
+{"messages": [{"role": "user", "content": "how do you say yesterday in bangla"}, {"role": "assistant", "content": "\"yesterday\" বাংলায়: গতকাল. Banglish: gotokal."}]}
+{"messages": [{"role": "user", "content": "yesterday বাংলায় কী"}, {"role": "assistant", "content": "\"yesterday\" = গতকাল (Banglish: gotokal)"}]}
+{"messages": [{"role": "user", "content": "gotokal mane ki"}, {"role": "assistant", "content": "\"gotokal\" mane \"yesterday\" / গতকাল."}]}
+{"messages": [{"role": "user", "content": "how do you say morning in bangla"}, {"role": "assistant", "content": "\"morning\" বাংলায়: সকাল. Banglish: shokal."}]}
+{"messages": [{"role": "user", "content": "morning বাংলায় কী"}, {"role": "assistant", "content": "\"morning\" = সকাল (Banglish: shokal)"}]}
+{"messages": [{"role": "user", "content": "shokal mane ki"}, {"role": "assistant", "content": "\"shokal\" mane \"morning\" / সকাল."}]}
+{"messages": [{"role": "user", "content": "how do you say night in bangla"}, {"role": "assistant", "content": "\"night\" বাংলায়: রাত. Banglish: rat."}]}
+{"messages": [{"role": "user", "content": "night বাংলায় কী"}, {"role": "assistant", "content": "\"night\" = রাত (Banglish: rat)"}]}
+{"messages": [{"role": "user", "content": "rat mane ki"}, {"role": "assistant", "content": "\"rat\" mane \"night\" / রাত."}]}
+{"messages": [{"role": "user", "content": "how do you say food in bangla"}, {"role": "assistant", "content": "\"food\" বাংলায়: খাবার. Banglish: khabar."}]}
+{"messages": [{"role": "user", "content": "food বাংলায় কী"}, {"role": "assistant", "content": "\"food\" = খাবার (Banglish: khabar)"}]}
+{"messages": [{"role": "user", "content": "khabar mane ki"}, {"role": "assistant", "content": "\"khabar\" mane \"food\" / খাবার."}]}
+{"messages": [{"role": "user", "content": "how do you say work in bangla"}, {"role": "assistant", "content": "\"work\" বাংলায়: কাজ. Banglish: kaj."}]}
+{"messages": [{"role": "user", "content": "work বাংলায় কী"}, {"role": "assistant", "content": "\"work\" = কাজ (Banglish: kaj)"}]}
+{"messages": [{"role": "user", "content": "kaj mane ki"}, {"role": "assistant", "content": "\"kaj\" mane \"work\" / কাজ."}]}
+{"messages": [{"role": "user", "content": "how do you say school in bangla"}, {"role": "assistant", "content": "\"school\" বাংলায়: স্কুল. Banglish: iskul."}]}
+{"messages": [{"role": "user", "content": "school বাংলায় কী"}, {"role": "assistant", "content": "\"school\" = স্কুল (Banglish: iskul)"}]}
+{"messages": [{"role": "user", "content": "iskul mane ki"}, {"role": "assistant", "content": "\"iskul\" mane \"school\" / স্কুল."}]}
+{"messages": [{"role": "user", "content": "how do you say love in bangla"}, {"role": "assistant", "content": "\"love\" বাংলায়: ভালোবাসা. Banglish: bhalobasha."}]}
+{"messages": [{"role": "user", "content": "love বাংলায় কী"}, {"role": "assistant", "content": "\"love\" = ভালোবাসা (Banglish: bhalobasha)"}]}
+{"messages": [{"role": "user", "content": "bhalobasha mane ki"}, {"role": "assistant", "content": "\"bhalobasha\" mane \"love\" / ভালোবাসা."}]}
+{"messages": [{"role": "user", "content": "how do you say name in bangla"}, {"role": "assistant", "content": "\"name\" বাংলায়: নাম. Banglish: nam."}]}
+{"messages": [{"role": "user", "content": "name বাংলায় কী"}, {"role": "assistant", "content": "\"name\" = নাম (Banglish: nam)"}]}
+{"messages": [{"role": "user", "content": "nam mane ki"}, {"role": "assistant", "content": "\"nam\" mane \"name\" / নাম."}]}
+{"messages": [{"role": "user", "content": "how do you say what in bangla"}, {"role": "assistant", "content": "\"what\" বাংলায়: কী. Banglish: ki."}]}
+{"messages": [{"role": "user", "content": "what বাংলায় কী"}, {"role": "assistant", "content": "\"what\" = কী (Banglish: ki)"}]}
+{"messages": [{"role": "user", "content": "ki mane ki"}, {"role": "assistant", "content": "\"ki\" mane \"what\" / কী."}]}
+{"messages": [{"role": "user", "content": "how do you say who in bangla"}, {"role": "assistant", "content": "\"who\" বাংলায়: কে. Banglish: ke."}]}
+{"messages": [{"role": "user", "content": "who বাংলায় কী"}, {"role": "assistant", "content": "\"who\" = কে (Banglish: ke)"}]}
+{"messages": [{"role": "user", "content": "ke mane ki"}, {"role": "assistant", "content": "\"ke\" mane \"who\" / কে."}]}
+{"messages": [{"role": "user", "content": "how do you say where in bangla"}, {"role": "assistant", "content": "\"where\" বাংলায়: কোথায়. Banglish: kothay."}]}
+{"messages": [{"role": "user", "content": "where বাংলায় কী"}, {"role": "assistant", "content": "\"where\" = কোথায় (Banglish: kothay)"}]}
+{"messages": [{"role": "user", "content": "kothay mane ki"}, {"role": "assistant", "content": "\"kothay\" mane \"where\" / কোথায়."}]}
+{"messages": [{"role": "user", "content": "how do you say why in bangla"}, {"role": "assistant", "content": "\"why\" বাংলায়: কেন. Banglish: keno."}]}
+{"messages": [{"role": "user", "content": "why বাংলায় কী"}, {"role": "assistant", "content": "\"why\" = কেন (Banglish: keno)"}]}
+{"messages": [{"role": "user", "content": "keno mane ki"}, {"role": "assistant", "content": "\"keno\" mane \"why\" / কেন."}]}
+{"messages": [{"role": "user", "content": "how do you say when in bangla"}, {"role": "assistant", "content": "\"when\" বাংলায়: কখন. Banglish: kokhon."}]}
+{"messages": [{"role": "user", "content": "when বাংলায় কী"}, {"role": "assistant", "content": "\"when\" = কখন (Banglish: kokhon)"}]}
+{"messages": [{"role": "user", "content": "kokhon mane ki"}, {"role": "assistant", "content": "\"kokhon\" mane \"when\" / কখন."}]}
+{"messages": [{"role": "user", "content": "how do you say how in bangla"}, {"role": "assistant", "content": "\"how\" বাংলায়: কীভাবে. Banglish: kivabe."}]}
+{"messages": [{"role": "user", "content": "how বাংলায় কী"}, {"role": "assistant", "content": "\"how\" = কীভাবে (Banglish: kivabe)"}]}
+{"messages": [{"role": "user", "content": "kivabe mane ki"}, {"role": "assistant", "content": "\"kivabe\" mane \"how\" / কীভাবে."}]}
+{"messages": [{"role": "user", "content": "how do you say father in bangla"}, {"role": "assistant", "content": "\"father\" বাংলায়: বাবা. Banglish: baba."}]}
+{"messages": [{"role": "user", "content": "father বাংলায় কী"}, {"role": "assistant", "content": "\"father\" = বাবা (Banglish: baba)"}]}
+{"messages": [{"role": "user", "content": "baba mane ki"}, {"role": "assistant", "content": "\"baba\" mane \"father\" / বাবা."}]}
+{"messages": [{"role": "user", "content": "how do you say mother in bangla"}, {"role": "assistant", "content": "\"mother\" বাংলায়: মা. Banglish: ma."}]}
+{"messages": [{"role": "user", "content": "mother বাংলায় কী"}, {"role": "assistant", "content": "\"mother\" = মা (Banglish: ma)"}]}
+{"messages": [{"role": "user", "content": "ma mane ki"}, {"role": "assistant", "content": "\"ma\" mane \"mother\" / মা."}]}
+{"messages": [{"role": "user", "content": "how do you say brother in bangla"}, {"role": "assistant", "content": "\"brother\" বাংলায়: ভাই. Banglish: bhai."}]}
+{"messages": [{"role": "user", "content": "brother বাংলায় কী"}, {"role": "assistant", "content": "\"brother\" = ভাই (Banglish: bhai)"}]}
+{"messages": [{"role": "user", "content": "bhai mane ki"}, {"role": "assistant", "content": "\"bhai\" mane \"brother\" / ভাই."}]}
+{"messages": [{"role": "user", "content": "how do you say sister in bangla"}, {"role": "assistant", "content": "\"sister\" বাংলায়: বোন. Banglish: bon."}]}
+{"messages": [{"role": "user", "content": "sister বাংলায় কী"}, {"role": "assistant", "content": "\"sister\" = বোন (Banglish: bon)"}]}
+{"messages": [{"role": "user", "content": "bon mane ki"}, {"role": "assistant", "content": "\"bon\" mane \"sister\" / বোন."}]}
+{"messages": [{"role": "user", "content": "how do you say fish in bangla"}, {"role": "assistant", "content": "\"fish\" বাংলায়: মাছ. Banglish: mach."}]}
+{"messages": [{"role": "user", "content": "fish বাংলায় কী"}, {"role": "assistant", "content": "\"fish\" = মাছ (Banglish: mach)"}]}
+{"messages": [{"role": "user", "content": "mach mane ki"}, {"role": "assistant", "content": "\"mach\" mane \"fish\" / মাছ."}]}
+{"messages": [{"role": "user", "content": "how do you say money in bangla"}, {"role": "assistant", "content": "\"money\" বাংলায়: টাকা. Banglish: taka."}]}
+{"messages": [{"role": "user", "content": "money বাংলায় কী"}, {"role": "assistant", "content": "\"money\" = টাকা (Banglish: taka)"}]}
+{"messages": [{"role": "user", "content": "taka mane ki"}, {"role": "assistant", "content": "\"taka\" mane \"money\" / টাকা."}]}
+{"messages": [{"role": "user", "content": "how do you say time in bangla"}, {"role": "assistant", "content": "\"time\" বাংলায়: সময়. Banglish: somoy."}]}
+{"messages": [{"role": "user", "content": "time বাংলায় কী"}, {"role": "assistant", "content": "\"time\" = সময় (Banglish: somoy)"}]}
+{"messages": [{"role": "user", "content": "somoy mane ki"}, {"role": "assistant", "content": "\"somoy\" mane \"time\" / সময়."}]}
+{"messages": [{"role": "user", "content": "how do you say rain in bangla"}, {"role": "assistant", "content": "\"rain\" বাংলায়: বৃষ্টি. Banglish: brishti."}]}
+{"messages": [{"role": "user", "content": "rain বাংলায় কী"}, {"role": "assistant", "content": "\"rain\" = বৃষ্টি (Banglish: brishti)"}]}
+{"messages": [{"role": "user", "content": "brishti mane ki"}, {"role": "assistant", "content": "\"brishti\" mane \"rain\" / বৃষ্টি."}]}
+{"messages": [{"role": "user", "content": "how do you say sun in bangla"}, {"role": "assistant", "content": "\"sun\" বাংলায়: সূর্য / রোদ. Banglish: surjo / rod."}]}
+{"messages": [{"role": "user", "content": "sun বাংলায় কী"}, {"role": "assistant", "content": "\"sun\" = সূর্য / রোদ (Banglish: surjo / rod)"}]}
+{"messages": [{"role": "user", "content": "surjo / rod mane ki"}, {"role": "assistant", "content": "\"surjo / rod\" mane \"sun\" / সূর্য / রোদ."}]}
+{"messages": [{"role": "user", "content": "ki koro"}, {"role": "assistant", "content": "Ami apnar sathe kotha bolchi. Apni ki korte chan?"}]}
+{"messages": [{"role": "user", "content": "kothay thako"}, {"role": "assistant", "content": "Ami apnar server e thaki. Apni kothay thaken?"}]}
+{"messages": [{"role": "user", "content": "bhalo achi"}, {"role": "assistant", "content": "Shune bhalo laglo."}]}
+{"messages": [{"role": "user", "content": "taka koto"}, {"role": "assistant", "content": "Taka Bangladesher currency. Dam jiggesh korun item er nam diye."}]}
+{"messages": [{"role": "user", "content": "khabar koi"}, {"role": "assistant", "content": "Rannaghor e, othoba dokan theke. Ki khabar chai?"}]}
+{"messages": [{"role": "user", "content": "school e jabo"}, {"role": "assistant", "content": "Bhalo. Porashona korle valo hobe."}]}
+{"messages": [{"role": "user", "content": "ami kushi"}, {"role": "assistant", "content": "Shune darun laglo!"}]}
+{"messages": [{"role": "user", "content": "ami dukkhito"}, {"role": "assistant", "content": "Thik ache. Slow kore bolun, ami shunbo."}]}

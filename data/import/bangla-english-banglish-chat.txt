@@ -1,0 +1,572 @@
+User: hello
+AI: Hello! I'm your personal AI. How can I help you today?
+
+User: hi
+AI: Hi! You can write English, বাংলা or Banglish.
+
+User: hey
+AI: Hey! What's on your mind?
+
+User: good morning
+AI: Good morning! Hope you have a good day.
+
+User: good night
+AI: Good night. Rest well.
+
+User: how are you
+AI: I'm well — running on your own server. How are you?
+
+User: who are you
+AI: I'm MY-AI, your self-hosted assistant. No company API.
+
+User: thank you
+AI: You're welcome.
+
+User: thanks
+AI: Glad I could help.
+
+User: হাই
+AI: আসসালামু আলাইকুম! আমি আপনার নিজের AI। কী সাহায্য করতে পারি?
+
+User: হ্যালো
+AI: হ্যালো! বাংলা, ইংরেজি বা Banglish — যেভাবে খুশি লিখুন।
+
+User: কেমন আছো
+AI: ভালো আছি, ধন্যবাদ। আপনি কেমন আছেন?
+
+User: কেমন আছেন
+AI: আমি ভালো আছি। আপনার কী জানার আছে?
+
+User: তুমি কে
+AI: আমি MY-AI — আপনার সার্ভারে চলা পার্সোনাল অ্যাসিস্ট্যান্ট।
+
+User: ধন্যবাদ
+AI: আপনাকেও ধন্যবাদ। আর কিছু লাগলে বলুন।
+
+User: শুভ সকাল
+AI: শুভ সকাল! আজকের দিনটা ভালো কাটুক।
+
+User: শুভ রাত্রি
+AI: শুভ রাত্রি। আরাম করে ঘুমান।
+
+User: assalamualaikum
+AI: Wa alaikum assalam. Ami apnar nijer AI. Kemon achhen?
+
+User: kemon acho
+AI: Bhalo achi. Apni kemon acho?
+
+User: tumi ke
+AI: Ami MY-AI — apnar nijer server e choli.
+
+User: dhonnobad
+AI: Welcome. Aro kichu lagle bolun.
+
+User: what is the capital of Bangladesh
+AI: Dhaka is the capital of Bangladesh.
+
+User: বাংলাদেশের রাজধানী কী
+AI: বাংলাদেশের রাজধানী ঢাকা।
+
+User: bangladesher rajdhani ki
+AI: Bangladesher rajdhani Dhaka.
+
+User: বাংলাদেশের ভাষা কী
+AI: বাংলাদেশের রাষ্ট্রভাষা বাংলা।
+
+User: bangladesher vasha ki
+AI: Rashtrobhasha Bangla.
+
+User: what currency does Bangladesh use
+AI: Bangladesh uses the Taka (BDT, ৳).
+
+User: বাংলাদেশের মুদ্রা কী
+AI: বাংলাদেশের মুদ্রা টাকা (BDT)।
+
+User: where is cox's bazar
+AI: Cox's Bazar is in south-east Bangladesh, famous for a very long sea beach.
+
+User: কক্সবাজার কোথায়
+AI: কক্সবাজার বাংলাদেশের দক্ষিণ-পূর্বে, দীর্ঘ সমুদ্র সৈকতের জন্য বিখ্যাত।
+
+User: sundarban ki
+AI: Sundarban world er sobcheye boro mangrove forest. Royal Bengal Tiger er bas.
+
+User: সুন্দরবন কী
+AI: সুন্দরবন পৃথিবীর সবচেয়ে বড় ম্যানগ্রোভ বন। রয়েল বেঙ্গল টাইগারের বাস এখানে।
+
+User: padma setu
+AI: Padma Bridge connects Munshiganj with Shariatpur/Madaripur across the Padma.
+
+User: পদ্মা সেতু
+AI: পদ্মা সেতু পদ্মা নদীর উপর মুন্সিগঞ্জকে শরিয়তপুর/মাদারীপুরের সাথে যুক্ত করে।
+
+User: ekushe february
+AI: 21 February is International Mother Language Day, from the 1952 language movement.
+
+User: একুশে ফেব্রুয়ারি
+AI: একুশে ফেব্রুয়ারি আন্তর্জাতিক মাতৃভাষা দিবস — ১৯৫২ সালের ভাষা আন্দোলন।
+
+User: 26 march
+AI: 26 March is Bangladesh Independence Day.
+
+User: ১৬ ডিসেম্বর
+AI: ১৬ ডিসেম্বর বাংলাদেশের বিজয় দিবস (১৯৭১)।
+
+User: victory day bangladesh
+AI: 16 December is Victory Day in Bangladesh (1971).
+
+User: dhaka kothay
+AI: Dhaka Bangladesher rajdhani, Buriganga nodir kache.
+
+User: chittagong
+AI: Chattogram is Bangladesh's main port city on the Bay of Bengal.
+
+User: সিলেট
+AI: সিলেট উত্তর-পূর্ব বাংলাদেশে, চা-বাগান ও হাওরের জন্য পরিচিত।
+
+User: ilish
+AI: Ilish (hilsa) is Bangladesh's national fish.
+
+User: ইলিশ
+AI: ইলিশ বাংলাদেশের জাতীয় মাছ।
+
+User: what is pohela boishakh
+AI: Pohela Boishakh is Bengali New Year, 14 April in Bangladesh.
+
+User: পহেলা বৈশাখ
+AI: পহেলা বৈশাখ বাংলা নববর্ষ — বাংলাদেশে সাধারণত ১৪ এপ্রিল।
+
+User: খুলনা
+AI: খুলনা দক্ষিণ-পশ্চিম বাংলাদেশের বড় শহর, সুন্দরবনের কাছে।
+
+User: রাজশাহী
+AI: রাজশাহী উত্তর বাংলাদেশে, রেশম ও আমের জন্য পরিচিত।
+
+User: রংপুর
+AI: রংপুর উত্তর বাংলাদেশের বিভাগীয় শহর।
+
+User: বরিশাল
+AI: বরিশাল দক্ষিণাঞ্চলের নদীমাতৃক শহর।
+
+User: what's the weather
+AI: Try: Dhaka weather today — or /research Dhaka weather.
+
+User: আবহাওয়া কেমন
+AI: শহরের নামসহ জিজ্ঞেস করুন, অথবা /research ঢাকা আবহাওয়া।
+
+User: abohawa kemon
+AI: Shohor er nam din, jemon: Dhaka weather today.
+
+User: how to cook rice
+AI: Wash rice, about 1:2 rice to water, boil then simmer covered. A rice cooker also works.
+
+User: ভাত কীভাবে রান্না করব
+AI: চাল ধুয়ে নিন। চাল:পানি প্রায় ১:২। ফুটিয়ে ঢেকে সিদ্ধ করুন।
+
+User: bhat kivabe ranna
+AI: Chal dhuen. Chal:pani 1:2. Futiye dheke siddho korun.
+
+User: i am hungry
+AI: Rice with dal and a vegetable, or khichuri in one pot.
+
+User: ক্ষুধা লাগছে
+AI: ভাত-ডাল-সবজি সহজ। খিচুড়িও ভালো।
+
+User: help
+AI: Chat, say My name is …, add knowledge, /research a topic, or import more txt files.
+
+User: সাহায্য
+AI: চ্যাট করুন, আমার নাম বলুন, নলেজ যোগ করুন, /research দিন।
+
+User: amar nam ki
+AI: Apni ekhono nam bolen ni. Amar nam … likhun.
+
+User: আমার নাম কী
+AI: আপনি এখনো নাম বলেননি। আমার নাম … লিখুন।
+
+User: what is my name
+AI: You haven't told me your name yet. Say My name is …
+
+User: how do I train you
+AI: Import these files in Training, chat more, or press Train. I retrain in the background.
+
+User: তোমাকে কীভাবে ট্রেন করব
+AI: Training ট্যাবে txt/jsonl ইমপোর্ট করুন। ব্যাকগ্রাউন্ডে ট্রেন হব।
+
+User: cricket
+AI: Bangladesh cricket is huge. For a live score try /research Bangladesh cricket.
+
+User: ক্রিকেট
+AI: বাংলাদেশে ক্রিকেট খুব জনপ্রিয়। স্কোর চাইলে /research Bangladesh cricket।
+
+User: study tips
+AI: Short sessions, one topic, write in your own words, sleep enough.
+
+User: পড়ালেখা
+AI: ছোট সেশনে একটা বিষয়। নিজের ভাষায় লিখে নিন।
+
+User: how do you say hello in bangla
+AI: "hello" বাংলায়: হ্যালো / আসসালামু আলাইকুম. Banglish: assalamualaikum.
+
+User: hello বাংলায় কী
+AI: "hello" = হ্যালো / আসসালামু আলাইকুম (Banglish: assalamualaikum)
+
+User: assalamualaikum mane ki
+AI: "assalamualaikum" mane "hello" / হ্যালো / আসসালামু আলাইকুম.
+
+User: how do you say how are you in bangla
+AI: "how are you" বাংলায়: কেমন আছো. Banglish: kemon acho.
+
+User: how are you বাংলায় কী
+AI: "how are you" = কেমন আছো (Banglish: kemon acho)
+
+User: kemon acho mane ki
+AI: "kemon acho" mane "how are you" / কেমন আছো.
+
+User: how do you say I am fine in bangla
+AI: "I am fine" বাংলায়: আমি ভালো আছি. Banglish: ami bhalo achi.
+
+User: I am fine বাংলায় কী
+AI: "I am fine" = আমি ভালো আছি (Banglish: ami bhalo achi)
+
+User: ami bhalo achi mane ki
+AI: "ami bhalo achi" mane "I am fine" / আমি ভালো আছি.
+
+User: how do you say thank you in bangla
+AI: "thank you" বাংলায়: ধন্যবাদ. Banglish: dhonnobad.
+
+User: thank you বাংলায় কী
+AI: "thank you" = ধন্যবাদ (Banglish: dhonnobad)
+
+User: dhonnobad mane ki
+AI: "dhonnobad" mane "thank you" / ধন্যবাদ.
+
+User: how do you say yes in bangla
+AI: "yes" বাংলায়: হ্যাঁ. Banglish: hya.
+
+User: yes বাংলায় কী
+AI: "yes" = হ্যাঁ (Banglish: hya)
+
+User: hya mane ki
+AI: "hya" mane "yes" / হ্যাঁ.
+
+User: how do you say no in bangla
+AI: "no" বাংলায়: না. Banglish: na.
+
+User: no বাংলায় কী
+AI: "no" = না (Banglish: na)
+
+User: na mane ki
+AI: "na" mane "no" / না.
+
+User: how do you say please in bangla
+AI: "please" বাংলায়: দয়া করে. Banglish: doya kore.
+
+User: please বাংলায় কী
+AI: "please" = দয়া করে (Banglish: doya kore)
+
+User: doya kore mane ki
+AI: "doya kore" mane "please" / দয়া করে.
+
+User: how do you say sorry in bangla
+AI: "sorry" বাংলায়: দুঃখিত. Banglish: dukkhito.
+
+User: sorry বাংলায় কী
+AI: "sorry" = দুঃখিত (Banglish: dukkhito)
+
+User: dukkhito mane ki
+AI: "dukkhito" mane "sorry" / দুঃখিত.
+
+User: how do you say water in bangla
+AI: "water" বাংলায়: পানি. Banglish: pani.
+
+User: water বাংলায় কী
+AI: "water" = পানি (Banglish: pani)
+
+User: pani mane ki
+AI: "pani" mane "water" / পানি.
+
+User: how do you say rice in bangla
+AI: "rice" বাংলায়: ভাত. Banglish: bhat.
+
+User: rice বাংলায় কী
+AI: "rice" = ভাত (Banglish: bhat)
+
+User: bhat mane ki
+AI: "bhat" mane "rice" / ভাত.
+
+User: how do you say tea in bangla
+AI: "tea" বাংলায়: চা. Banglish: cha.
+
+User: tea বাংলায় কী
+AI: "tea" = চা (Banglish: cha)
+
+User: cha mane ki
+AI: "cha" mane "tea" / চা.
+
+User: how do you say house in bangla
+AI: "house" বাংলায়: বাড়ি. Banglish: bari.
+
+User: house বাংলায় কী
+AI: "house" = বাড়ি (Banglish: bari)
+
+User: bari mane ki
+AI: "bari" mane "house" / বাড়ি.
+
+User: how do you say friend in bangla
+AI: "friend" বাংলায়: বন্ধু. Banglish: bondhu.
+
+User: friend বাংলায় কী
+AI: "friend" = বন্ধু (Banglish: bondhu)
+
+User: bondhu mane ki
+AI: "bondhu" mane "friend" / বন্ধু.
+
+User: how do you say today in bangla
+AI: "today" বাংলায়: আজ. Banglish: aj.
+
+User: today বাংলায় কী
+AI: "today" = আজ (Banglish: aj)
+
+User: aj mane ki
+AI: "aj" mane "today" / আজ.
+
+User: how do you say tomorrow in bangla
+AI: "tomorrow" বাংলায়: আগামীকাল. Banglish: agamikal.
+
+User: tomorrow বাংলায় কী
+AI: "tomorrow" = আগামীকাল (Banglish: agamikal)
+
+User: agamikal mane ki
+AI: "agamikal" mane "tomorrow" / আগামীকাল.
+
+User: how do you say yesterday in bangla
+AI: "yesterday" বাংলায়: গতকাল. Banglish: gotokal.
+
+User: yesterday বাংলায় কী
+AI: "yesterday" = গতকাল (Banglish: gotokal)
+
+User: gotokal mane ki
+AI: "gotokal" mane "yesterday" / গতকাল.
+
+User: how do you say morning in bangla
+AI: "morning" বাংলায়: সকাল. Banglish: shokal.
+
+User: morning বাংলায় কী
+AI: "morning" = সকাল (Banglish: shokal)
+
+User: shokal mane ki
+AI: "shokal" mane "morning" / সকাল.
+
+User: how do you say night in bangla
+AI: "night" বাংলায়: রাত. Banglish: rat.
+
+User: night বাংলায় কী
+AI: "night" = রাত (Banglish: rat)
+
+User: rat mane ki
+AI: "rat" mane "night" / রাত.
+
+User: how do you say food in bangla
+AI: "food" বাংলায়: খাবার. Banglish: khabar.
+
+User: food বাংলায় কী
+AI: "food" = খাবার (Banglish: khabar)
+
+User: khabar mane ki
+AI: "khabar" mane "food" / খাবার.
+
+User: how do you say work in bangla
+AI: "work" বাংলায়: কাজ. Banglish: kaj.
+
+User: work বাংলায় কী
+AI: "work" = কাজ (Banglish: kaj)
+
+User: kaj mane ki
+AI: "kaj" mane "work" / কাজ.
+
+User: how do you say school in bangla
+AI: "school" বাংলায়: স্কুল. Banglish: iskul.
+
+User: school বাংলায় কী
+AI: "school" = স্কুল (Banglish: iskul)
+
+User: iskul mane ki
+AI: "iskul" mane "school" / স্কুল.
+
+User: how do you say love in bangla
+AI: "love" বাংলায়: ভালোবাসা. Banglish: bhalobasha.
+
+User: love বাংলায় কী
+AI: "love" = ভালোবাসা (Banglish: bhalobasha)
+
+User: bhalobasha mane ki
+AI: "bhalobasha" mane "love" / ভালোবাসা.
+
+User: how do you say name in bangla
+AI: "name" বাংলায়: নাম. Banglish: nam.
+
+User: name বাংলায় কী
+AI: "name" = নাম (Banglish: nam)
+
+User: nam mane ki
+AI: "nam" mane "name" / নাম.
+
+User: how do you say what in bangla
+AI: "what" বাংলায়: কী. Banglish: ki.
+
+User: what বাংলায় কী
+AI: "what" = কী (Banglish: ki)
+
+User: ki mane ki
+AI: "ki" mane "what" / কী.
+
+User: how do you say who in bangla
+AI: "who" বাংলায়: কে. Banglish: ke.
+
+User: who বাংলায় কী
+AI: "who" = কে (Banglish: ke)
+
+User: ke mane ki
+AI: "ke" mane "who" / কে.
+
+User: how do you say where in bangla
+AI: "where" বাংলায়: কোথায়. Banglish: kothay.
+
+User: where বাংলায় কী
+AI: "where" = কোথায় (Banglish: kothay)
+
+User: kothay mane ki
+AI: "kothay" mane "where" / কোথায়.
+
+User: how do you say why in bangla
+AI: "why" বাংলায়: কেন. Banglish: keno.
+
+User: why বাংলায় কী
+AI: "why" = কেন (Banglish: keno)
+
+User: keno mane ki
+AI: "keno" mane "why" / কেন.
+
+User: how do you say when in bangla
+AI: "when" বাংলায়: কখন. Banglish: kokhon.
+
+User: when বাংলায় কী
+AI: "when" = কখন (Banglish: kokhon)
+
+User: kokhon mane ki
+AI: "kokhon" mane "when" / কখন.
+
+User: how do you say how in bangla
+AI: "how" বাংলায়: কীভাবে. Banglish: kivabe.
+
+User: how বাংলায় কী
+AI: "how" = কীভাবে (Banglish: kivabe)
+
+User: kivabe mane ki
+AI: "kivabe" mane "how" / কীভাবে.
+
+User: how do you say father in bangla
+AI: "father" বাংলায়: বাবা. Banglish: baba.
+
+User: father বাংলায় কী
+AI: "father" = বাবা (Banglish: baba)
+
+User: baba mane ki
+AI: "baba" mane "father" / বাবা.
+
+User: how do you say mother in bangla
+AI: "mother" বাংলায়: মা. Banglish: ma.
+
+User: mother বাংলায় কী
+AI: "mother" = মা (Banglish: ma)
+
+User: ma mane ki
+AI: "ma" mane "mother" / মা.
+
+User: how do you say brother in bangla
+AI: "brother" বাংলায়: ভাই. Banglish: bhai.
+
+User: brother বাংলায় কী
+AI: "brother" = ভাই (Banglish: bhai)
+
+User: bhai mane ki
+AI: "bhai" mane "brother" / ভাই.
+
+User: how do you say sister in bangla
+AI: "sister" বাংলায়: বোন. Banglish: bon.
+
+User: sister বাংলায় কী
+AI: "sister" = বোন (Banglish: bon)
+
+User: bon mane ki
+AI: "bon" mane "sister" / বোন.
+
+User: how do you say fish in bangla
+AI: "fish" বাংলায়: মাছ. Banglish: mach.
+
+User: fish বাংলায় কী
+AI: "fish" = মাছ (Banglish: mach)
+
+User: mach mane ki
+AI: "mach" mane "fish" / মাছ.
+
+User: how do you say money in bangla
+AI: "money" বাংলায়: টাকা. Banglish: taka.
+
+User: money বাংলায় কী
+AI: "money" = টাকা (Banglish: taka)
+
+User: taka mane ki
+AI: "taka" mane "money" / টাকা.
+
+User: how do you say time in bangla
+AI: "time" বাংলায়: সময়. Banglish: somoy.
+
+User: time বাংলায় কী
+AI: "time" = সময় (Banglish: somoy)
+
+User: somoy mane ki
+AI: "somoy" mane "time" / সময়.
+
+User: how do you say rain in bangla
+AI: "rain" বাংলায়: বৃষ্টি. Banglish: brishti.
+
+User: rain বাংলায় কী
+AI: "rain" = বৃষ্টি (Banglish: brishti)
+
+User: brishti mane ki
+AI: "brishti" mane "rain" / বৃষ্টি.
+
+User: how do you say sun in bangla
+AI: "sun" বাংলায়: সূর্য / রোদ. Banglish: surjo / rod.
+
+User: sun বাংলায় কী
+AI: "sun" = সূর্য / রোদ (Banglish: surjo / rod)
+
+User: surjo / rod mane ki
+AI: "surjo / rod" mane "sun" / সূর্য / রোদ.
+
+User: ki koro
+AI: Ami apnar sathe kotha bolchi. Apni ki korte chan?
+
+User: kothay thako
+AI: Ami apnar server e thaki. Apni kothay thaken?
+
+User: bhalo achi
+AI: Shune bhalo laglo.
+
+User: taka koto
+AI: Taka Bangladesher currency. Dam jiggesh korun item er nam diye.
+
+User: khabar koi
+AI: Rannaghor e, othoba dokan theke. Ki khabar chai?
+
+User: school e jabo
+AI: Bhalo. Porashona korle valo hobe.
+
+User: ami kushi
+AI: Shune darun laglo!
+
+User: ami dukkhito
+AI: Thik ache. Slow kore bolun, ami shunbo.
