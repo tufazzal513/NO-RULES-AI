@@ -730,6 +730,7 @@ export default function App() {
   ]);
   const [tInput, setTInput] = useState("");
   const [tTyping, setTTyping] = useState(false);
+  const [tEditingId, setTEditingId] = useState<number | null>(null);
 
   useEffect(() => {
     if (!tActiveId) return;
@@ -758,9 +759,66 @@ export default function App() {
         sessionStorage.setItem(TRAINING_SESSION_KEY, String(d.sessionId));
       }
       setTMessages((prev) => [...prev, { role: "ai", content: d.reply, mode: d.mode }]);
+      // Reload with database ids so edit / delete / regenerate work here too.
+      if (d.sessionId) void refreshTrainingMessages(d.sessionId);
       refreshBrain();
     } catch (e: any) {
       setTMessages((prev) => [...prev, { role: "ai", content: "⚠️ " + e.message }]);
+    } finally {
+      setTTyping(false);
+    }
+  };
+
+  /** Re-read the training conversation from the server (ids included). */
+  const refreshTrainingMessages = async (id: number) => {
+    try {
+      const d = await api(`/api/v1/chats/${id}/messages`);
+      if (Array.isArray(d) && d.length) setTMessages(d);
+    } catch {
+      /* keep what is on screen */
+    }
+  };
+
+  /** Same "edit a sent question and rerun" shortcut as the main chat. */
+  const editTrainingMessage = async (msg: ChatMessage, next: string) => {
+    if (!tActiveId || !msg.id) return;
+    setTTyping(true);
+    try {
+      await api(`/api/v1/chats/${tActiveId}/messages/${msg.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: next }),
+      });
+      await refreshTrainingMessages(tActiveId);
+      refreshBrain();
+      showToast("Training message edited ✏️");
+    } catch (e: any) {
+      showToast("⚠️ " + e.message);
+    } finally {
+      setTTyping(false);
+    }
+  };
+
+  const deleteTrainingMessage = async (msg: ChatMessage) => {
+    if (!tActiveId || !msg.id) return;
+    try {
+      await api(`/api/v1/chats/${tActiveId}/messages/${msg.id}`, { method: "DELETE" });
+      await refreshTrainingMessages(tActiveId);
+      refreshBrain();
+      showToast("Training message deleted 🗑️");
+    } catch (e: any) {
+      showToast("⚠️ " + e.message);
+    }
+  };
+
+  const regenerateTrainingLast = async () => {
+    if (!tActiveId || tTyping) return;
+    setTTyping(true);
+    try {
+      await api(`/api/v1/chats/${tActiveId}/regenerate`, { method: "POST" });
+      await refreshTrainingMessages(tActiveId);
+    } catch (e: any) {
+      showToast("⚠️ " + e.message);
     } finally {
       setTTyping(false);
     }
@@ -1363,12 +1421,64 @@ export default function App() {
             </button>
           </div>
           <div className="text-xs text-[#5f6368] mb-3">
-            In chat, question-like messages are researched automatically — or type /research &lt;topic&gt;. Bengali questions (কে, কী, কেন, সর্বশেষ, খবর…) work too.
+            In chat, question-like messages are researched automatically — or type /research &lt;topic&gt;.
+            English, বাংলা and Banglish all work: a Banglish question ("Bangladesher rajdhani ki?") is
+            transliterated to Bengali before searching, and every hit is scored for relevance so an
+            unrelated result is never returned as the answer.
           </div>
           {researchMsg && <div className="text-xs text-[#1a73e8] p-2.5 bg-[#e8f0fe] border border-[#d2e3fc] rounded-lg mb-3">{researchMsg}</div>}
           {researchResult && (
-            <div className="p-3.5 bg-[#f8f9fa] rounded-xl border border-[#e3e3e3] text-[13px] leading-relaxed text-[#1f1f1f] overflow-y-auto max-h-[280px] whitespace-pre-wrap">
-              {researchResult.ok ? researchResult.data?.finding?.answer : researchResult.message}
+            <div>
+              {researchResult.ok && researchResult.data?.finding && (
+                <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                  {typeof researchResult.data.finding.confidence === "number" && (
+                    <span
+                      className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full border ${
+                        researchResult.data.finding.confidence >= 0.62
+                          ? "bg-[#e6f4ea] text-[#188038] border-[#ceead6]"
+                          : "bg-[#fef7e0] text-[#b06000] border-[#feefc3]"
+                      }`}
+                      title="How well the answer matches the question"
+                    >
+                      {researchResult.data.finding.confidence >= 0.62 ? <CheckCircle2 size={11} /> : <CircleAlert size={11} />}
+                      confidence {Math.round(researchResult.data.finding.confidence * 100)}%
+                    </span>
+                  )}
+                  {researchResult.data.finding.query && (
+                    <span className="text-[11px] text-[#5f6368] bg-[#f0f4f9] border border-[#e3e3e3] px-2 py-0.5 rounded-full font-mono truncate max-w-full">
+                      searched: {researchResult.data.finding.query}
+                    </span>
+                  )}
+                  {(researchResult.data.finding.sourceHosts ?? []).map((h: string) => (
+                    <span key={h} className="text-[11px] text-[#5f6368] bg-[#f0f4f9] border border-[#e3e3e3] px-2 py-0.5 rounded-full font-mono">
+                      {h}
+                    </span>
+                  ))}
+                  {researchResult.data.finding.cached && (
+                    <span className="text-[11px] text-[#5f6368] bg-[#f0f4f9] border border-[#e3e3e3] px-2 py-0.5 rounded-full">
+                      {researchResult.data.finding.stale ? "stale cache" : "cached"}
+                    </span>
+                  )}
+                </div>
+              )}
+              <div className="p-3.5 bg-[#f8f9fa] rounded-xl border border-[#e3e3e3] text-[13px] leading-relaxed text-[#1f1f1f] overflow-y-auto max-h-[280px] whitespace-pre-wrap">
+                {researchResult.ok ? researchResult.data?.finding?.answer : researchResult.message}
+              </div>
+              {researchResult.ok && (researchResult.data?.finding?.sources ?? []).length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {researchResult.data.finding.sources.map((src: any, i: number) => (
+                    <a
+                      key={i}
+                      href={src.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block text-[11px] text-[#1a73e8] hover:underline truncate"
+                    >
+                      🔗 {src.title || src.url}
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           {!researchResult && (
@@ -1431,6 +1541,11 @@ export default function App() {
             setInput={setTInput}
             onSend={sendTraining}
             onSave={(m) => saveChatToKnowledge(m, true)}
+            onEdit={editTrainingMessage}
+            onDelete={deleteTrainingMessage}
+            onRegenerate={regenerateTrainingLast}
+            editingId={tEditingId}
+            setEditingId={setTEditingId}
           />
         </div>
 

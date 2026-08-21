@@ -27,7 +27,10 @@ A self-hosted General AI platform with a built-in REST API and web-based control
   snapshots can be restored any time. See [`TELEGRAM_SETUP.md`](./TELEGRAM_SETUP.md).
 - **Chat from Telegram 📱** — the same bot doubles as your AI assistant: message
   it in Telegram (from your phone) and your AI replies. Long-polling, no webhook
-  needed.
+  needed. **Every web shortcut exists as a slash command too** — `/new`,
+  `/history`, `/chats`, `/edit <new text>`, `/again`, `/undo`, `/clear`,
+  `/forget`, `/research <topic>` — and the bot answers in whichever of
+  English / বাংলা / Banglish you have been writing in.
 - **Trilingual brain 🗣️ — English, বাংলা and Banglish.** Write however you
   like ("what is my name", "আমার নাম কী", "amar nam ki") — one canonical
   matcher folds all three onto the same intent, and the reply comes back in the
@@ -219,3 +222,23 @@ trained model are never touched).
 Editing a question is a real edit, not a re-send: the message is rewritten in
 place, every message that came after it is removed (the old answer is no longer
 valid) and the AI answers the new wording — the same way ChatGPT/Gemini behave.
+
+The **Training tab** chat has the same edit / delete / regenerate controls, so a
+bad training exchange can be corrected instead of polluting the dataset.
+
+### …and the same shortcuts on your phone
+
+| Telegram command | Same as |
+| --- | --- |
+| `/new` | New chat |
+| `/history [n]` | Scroll back through this conversation |
+| `/chats` | The Recent list (▶️ marks the active one) |
+| `/edit <new text>` | ✏️ Edit the last question and rerun |
+| `/again` | 🔄 Regenerate |
+| `/undo` | 🗑️ Delete the last question + answer |
+| `/clear` | Delete every message of this conversation |
+| `/forget` | Wipe the AI's memory of you |
+| `/help` | The cheat sheet (⌘/Ctrl + /) |
+
+The bot picks its language from your recent messages, so a Banglish user gets
+Banglish command replies without configuring anything.

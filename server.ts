@@ -4,6 +4,7 @@ import fs from "fs";
 import cors from "cors";
 import { TelegramStorage } from "./server/telegram.ts";
 import { TelegramBot, type TelegramMessage } from "./server/telegram-bot.ts";
+import { createBotCommands } from "./server/telegram-commands.ts";
 import { AIEngine } from "./server/ai/engine.ts";
 import { ResearchService } from "./server/research/research.ts";
 import { openDatabase, resolveDbPath, SNAPSHOT_TABLES } from "./server/db.ts";
@@ -134,6 +135,19 @@ ai.setResearch(research);
 // Telegram bot — chat with your AI directly from Telegram (long-polling)
 // ---------------------------------------------------------------------------
 
+/**
+ * Slash-command handler: the web panel's chat shortcuts (new chat, history,
+ * edit, regenerate, undo, clear, forget) available from a phone too.
+ * Declared before `handleTelegramMessage` uses it — `const` in module scope is
+ * initialised at load time, well before any Telegram update arrives.
+ */
+const botCommands = createBotCommands({
+  db,
+  ai,
+  mirror: (collection, id, payload) => cloud.mirror(collection, id, payload),
+  mirrorDelete: (collection, id) => cloud.mirrorDelete(collection, id),
+});
+
 /** Route one incoming Telegram text message through the AI and persist it. */
 async function handleTelegramMessage(msg: TelegramMessage): Promise<string> {
   // The bot must not touch the database while a restore is running.
@@ -143,49 +157,25 @@ async function handleTelegramMessage(msg: TelegramMessage): Promise<string> {
   const text = (msg.text || "").trim();
   const chatId = msg.chat.id;
   const name = msg.chat.first_name || msg.from?.first_name || msg.chat.username || "friend";
-  const lower = text.toLowerCase();
 
-  if (lower === "/start") {
-    return (
-      `Hi ${name}! 👋 I'm MY-AI — your own personal AI.\n\n` +
-      "• Just type a message and I'll reply.\n" +
-      "• I remember facts about you (try: \"My name is …\").\n" +
-      "• I answer from your knowledge documents.\n" +
-      "• Everything is stored in your Telegram cloud database.\n\n" +
-      "Type /help for more."
-    );
-  }
-  if (lower === "/help" || lower === "/commands") {
-    return (
-      "Here's what I can do:\n\n" +
-      "💬 Chat with me normally — I'll answer.\n" +
-      "🧠 Memory: \"My name is …\", \"I like …\", \"remember that …\"\n" +
-      "📚 Ask about your documents (added in the AI Brain tab)\n" +
-      "➗ Math: just type \"12 * 8 + 4\"\n" +
-      "🔎 Research: ask current questions, or /research <topic>\n" +
-      "\nCommands:\n/start — welcome\n/help — this help"
-    );
-  }
+  // Slash commands — the same chat shortcuts as the web panel (new chat,
+  // history, edit, regenerate, undo, clear, forget…), answered in the
+  // language the user has been writing in.
+  const command = await botCommands.handleCommand(text, chatId, name);
+  if (command.handled) return command.reply;
 
   // Find (or create) the conversation for this Telegram user.
-  let conv = db.prepare("SELECT id FROM conversations WHERE telegram_chat_id = ?").get(String(chatId)) as any;
-  if (!conv) {
-    const info = db.prepare("INSERT INTO conversations (title, telegram_chat_id) VALUES (?, ?)").run(`TG: ${name}`, String(chatId));
-    conv = { id: Number(info.lastInsertRowid) };
-    tryMirror("conversations", conv.id, { id: conv.id, title: `TG: ${name}`, telegram_chat_id: String(chatId) });
-  }
+  const conv = botCommands.currentConversation(chatId, name);
   const sid = conv.id;
 
   // Persist the user's message.
-  const um = db.prepare("INSERT INTO chat_messages (session_id, role, content, source) VALUES (?, 'user', ?, 'telegram')").run(sid, text);
-  tryMirror("chat_messages", um.lastInsertRowid, { id: um.lastInsertRowid, session_id: sid, role: "user", content: text, source: "telegram" });
+  botCommands.saveMessage(sid, "user", text);
 
   // Get the AI's reply (brain first, keyless online research if needed).
   const result = await ai.replyAsync(text);
 
   // Persist the AI's reply.
-  const am = db.prepare("INSERT INTO chat_messages (session_id, role, content, source) VALUES (?, 'ai', ?, 'telegram')").run(sid, result.reply);
-  tryMirror("chat_messages", am.lastInsertRowid, { id: am.lastInsertRowid, session_id: sid, role: "ai", content: result.reply, source: "telegram" });
+  botCommands.saveMessage(sid, "ai", result.reply);
 
   return result.reply;
 }

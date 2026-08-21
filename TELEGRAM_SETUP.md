@@ -69,9 +69,28 @@ Delete হলে একটা **tombstone** মেসেজ যায়:
 
 **একই bot token** storage এবং AI assistant দুটোর জন্যই ব্যবহার হয়। Bot-কে Telegram-এ মেসেজ করলেই আপনার নিজের AI উত্তর দেবে।
 
-- `/start` — ওয়েলকাম
-- `/help` — কী কী করতে পারে
-- যেকোনো মেসেজ → আপনার AI brain (memory, knowledge, math সব কাজ করে)
+AI **English, বাংলা আর Banglish** — তিন ভাষাতেই বোঝে, আর আপনি যে ভাষায় লিখবেন
+সেই ভাষাতেই উত্তর দেয়। Bot-এর কমান্ডগুলোও আপনার ভাষা ধরে নিয়ে উত্তর দেয়
+(আপনার শেষ কয়েকটা মেসেজ দেখে ভাষা ঠিক করা হয়)।
+
+ওয়েব প্যানেলের **সব chat shortcut** এখানেও আছে:
+
+| কমান্ড | কাজ |
+|---|---|
+| `/start` | ওয়েলকাম মেসেজ |
+| `/help` | সব shortcut-এর তালিকা |
+| `/new` | নতুন কথোপকথন শুরু (আগেরটা history-তে থেকে যায়) |
+| `/history [n]` | এই কথোপকথনের শেষ n (default 10) মেসেজ |
+| `/chats` | সব কথোপকথনের তালিকা, চলতিটা ▶️ দিয়ে চিহ্নিত |
+| `/edit <নতুন লেখা>` | শেষ প্রশ্নটা বদলে আবার উত্তর নিন (পুরনো উত্তর মুছে যায়) |
+| `/again` | শেষ উত্তরটা নতুন করে তৈরি করুন |
+| `/undo` | শেষ প্রশ্ন ও তার উত্তর মুছে ফেলুন |
+| `/clear` | এই কথোপকথনের সব মেসেজ মুছুন (Knowledge/Memory অক্ষত) |
+| `/forget` | আপনার সম্পর্কে মনে রাখা সব তথ্য মুছুন |
+| `/research <বিষয়>` | জোর করে অনলাইনে খুঁজুন |
+| যেকোনো মেসেজ | আপনার AI brain (memory, knowledge, math, research) |
+
+`/help@YourBotName` লিখলেও কাজ করে (group-এ কাজে লাগে)।
 
 Long-polling পদ্ধতি, তাই কোনো webhook URL লাগে না।
 
@@ -93,9 +112,16 @@ Long-polling পদ্ধতি, তাই কোনো webhook URL লাগে
 2. নাম দিন (যেমন: `My AI Database`)
 3. **Private** রাখুন
 4. Settings → **Administrators** → **Add Admin**
-5. আপনার বটটাকে admin বানান। এই দুটি permission অবশ্যই চালু রাখুন:
-   - **Post Messages** (snapshot আপলোডের জন্য)
+5. আপনার বটটাকে admin বানান। এই permission-গুলো চালু রাখুন:
+   - **Post Messages** (snapshot আপলোডের জন্য) — *বাধ্যতামূলক*
    - **Pin Messages** (latest snapshot চিহ্নিত করার জন্য — **restore-এর জন্য জরুরি**)
+   - **Change Channel Info** (latest snapshot-এর দ্বিতীয় pointer চ্যানেল
+     description-এ লেখা হয় — pin মুছে গেলে বা pin permission না থাকলে এটাই
+     আপনার ডেটা ফিরে পাওয়ার backup রাস্তা)
+
+> তিনটার একটাও না থাকলে অ্যাপ ক্র্যাশ করবে না — শুধু warning দেবে। তবে
+> **Pin আর Change Info দুটোর একটাও না থাকলে** wipe হওয়া container নিজের
+> backup খুঁজে পাবে না; তখন **Restore from file** দিয়ে ফেরাতে হবে।
 
 ### ধাপ ৩ — চ্যানেলের ID বের করুন
 1. চ্যানেলে যেকোনো একটা মেসেজ পাঠান
@@ -185,7 +211,9 @@ Restore চলাকালে chat API-এর উত্তর:
 | POST | `/api/v1/telegram/snapshot` | পুরো DB-র gzip snapshot আপলোড ও pin করে |
 | GET | `/api/v1/telegram/snapshot/download` | Snapshot-টা সরাসরি JSON ফাইল হিসেবে নামায় |
 | GET | `/api/v1/telegram/snapshots` | snapshot ও index-এর লিস্ট |
-| POST | `/api/v1/telegram/restore` | `{ "fileId": "..." }` অথবা খালি body দিলে pinned latest snapshot |
+| POST | `/api/v1/telegram/restore` | `{ "fileId": "..." }` অথবা খালি body দিলে latest snapshot |
+| POST | `/api/v1/telegram/restore/file` | আপলোড করা snapshot ফাইল থেকে restore — `{ "snapshot": {...} }` বা `{ "base64": "..." }` |
+| POST | `/api/v1/telegram/restore/dismiss` | `restore_failed` অবস্থা থেকে বেরিয়ে লোকাল ডেটা নিয়ে চালু হন |
 | POST | `/api/v1/backup` | raw `.db` ফাইল ব্যাকআপ |
 
 ### উদাহরণ
@@ -207,12 +235,40 @@ curl -X POST http://localhost:3000/api/v1/telegram/restore \
 
 ## 🧷 Latest snapshot কীভাবে খুঁজে পাওয়া যায়?
 
-Telegram bot API দিয়ে চ্যানেলের পুরনো মেসেজের লিস্ট পড়া যায় **না**। তাই:
+Telegram bot API দিয়ে চ্যানেলের পুরনো মেসেজের লিস্ট পড়া যায় **না**। তাই
+প্রতিটি সফল snapshot-এর `file_id` **দুই জায়গায়** রাখা হয় — একটা নষ্ট হলে
+অন্যটা দিয়ে ডেটা ফিরে পাওয়া যায়:
 
-- প্রতিটি সফল snapshot আপলোডের পর সেই মেসেজটা চ্যানেলে **pin** করা হয়।
-- Render restart-এ SQLite মুছে গেলেও `getChat` API দিয়ে **pinned message** পড়া যায় → সেখান থেকে permanent `file_id` পাওয়া যায় → সেটা দিয়ে ফাইল নামিয়ে restore হয়।
+1. **Pinned message** — snapshot মেসেজটা চ্যানেলে pin করা হয়। `getChat` API
+   pinned message ফেরত দেয় → সেখান থেকে permanent `file_id`।
+   (দরকার: **Pin Messages** permission)
+2. **Channel description** — `MYAI_SNAPSHOT|<file_id>|<createdAt>|<records>`
+   ফরম্যাটে description-এও লেখা হয়। `getChat` description-ও ফেরত দেয়।
+   (দরকার: **Change Channel Info** permission)
 
-এজন্যই bot-এর **Pin Messages** permission দরকার।
+Restore-এর সময় খোঁজার ক্রম: **pin → description → লোকাল index**।
+
+> আগে শুধু pin দেখা হতো, তাই bot-এর pin permission না থাকলে বা কেউ pin সরিয়ে
+> দিলে restore "No snapshot found" বলত — অথচ ডেটা চ্যানেলেই পড়ে থাকত।
+> description pointer সেই ফাঁকটা বন্ধ করে।
+
+### শেষ ভরসা — Restore from file
+
+Telegram একেবারেই কাজ না করলে (ভুল channel id, bot admin থেকে সরে গেছে):
+Telegram Cloud ট্যাব → **⬇️ Download Snapshot (JSON)** দিয়ে ফাইলটা রেখে দিন,
+পরে **⬆️ Restore from file** দিয়ে সেটা আপলোড করলেই সব ডেটা ফিরে আসবে।
+একই checksum validation, একই single transaction — কাজেই ভুল ফাইল দিলে
+ডাটাবেসের কিছুই নষ্ট হবে না।
+
+```bash
+# ডাউনলোড
+curl -o backup.json http://localhost:3000/api/v1/telegram/snapshot/download
+
+# ফাইল থেকে restore
+curl -X POST http://localhost:3000/api/v1/telegram/restore/file \
+  -H "Content-Type: application/json" \
+  -d "{\"snapshot\": $(cat backup.json)}"
+```
 
 ---
 
@@ -224,7 +280,7 @@ Telegram network call mock করা আছে, তাই ইন্টারন�
 npm test
 ```
 
-কভার করা হয়েছে: snapshot-এ সব টেবিল · checksum validation · corrupt snapshot rejection · empty DB auto restore · non-empty DB overwrite prevention · concurrent snapshot lock · restore-before-bot-start · memory/knowledge/model mirror · delete tombstone · Telegram unavailable fallback।
+কভার করা হয়েছে: snapshot-এ সব টেবিল · checksum validation · corrupt snapshot rejection · empty DB auto restore · non-empty DB overwrite prevention · concurrent snapshot lock · restore-before-bot-start · memory/knowledge/model mirror · delete tombstone · Telegram unavailable fallback · **পুরনো (schema v1) snapshot restore** · **আপলোড করা ফাইল থেকে restore** · **bot-এর সব chat shortcut (`/new` `/history` `/chats` `/edit` `/again` `/undo` `/clear` `/forget`) তিন ভাষায়**।
 
 ---
 

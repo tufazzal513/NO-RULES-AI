@@ -149,13 +149,37 @@ Free filesystem ephemeral হওয়ার কারণে restart/spin-down/r
 
 - Render log-এ `♻️ Restoring the latest snapshot…` এবং `✅ Restore complete` আছে কি না।
 - `TELEGRAM_AUTO_RESTORE=true` সেট আছে কি না।
-- Channel-এ আদৌ কোনো snapshot **pin** করা আছে কি না (bot-এর Pin Messages permission লাগে)।
+- Channel-এ snapshot **pin** করা আছে কি না, অথবা channel **description**-এ
+  `MYAI_SNAPSHOT|…` লেখা আছে কি না। অ্যাপ এই দুটোর যেকোনো একটা পেলেই restore
+  করতে পারে (ক্রম: pin → description → লোকাল index)। তাই bot-কে **Pin Messages**
+  আর **Change Channel Info** — অন্তত একটা permission দিন, দুটো দিলে সবচেয়ে ভালো।
 - `/api/v1/telegram/status`-এ `state`, `lastError` ও `latestSnapshotFileId` দেখুন।
 - সব ঠিক থাকলে UI থেকে **Restore Latest** চেপে ম্যানুয়ালি restore করুন।
+- Telegram একেবারেই কাজ না করলে: **⬆️ Restore from file** দিয়ে আগে ডাউনলোড করা
+  `myai_snapshot_*.json` আপলোড করুন — ওটাই সবচেয়ে নিশ্চিত রাস্তা।
+
+> **পুরনো backup restore হচ্ছে না?** আগে schema v1-এর snapshot (research cache
+> যোগ হওয়ার আগের) "incomplete" বলে বাতিল হতো। এখন schema version অনুযায়ী
+> টেবিল যাচাই হয়, তাই পুরনো snapshot-ও restore হয়। শুধু update করে redeploy করুন।
 
 ### State `restore_failed` দেখাচ্ছে
 
-Snapshot corrupt বা checksum mismatch হয়েছে। **আপনার local ডেটা মুছে যায়নি** এবং নিরাপত্তার জন্য bot বন্ধ রাখা হয়েছে। `/api/v1/telegram/status`-এর `lastError` দেখুন, তারপর UI-এর Snapshots লিস্ট থেকে আগের একটা ভালো snapshot বেছে **Restore** করুন।
+Snapshot corrupt বা checksum mismatch হয়েছে। **আপনার local ডেটা মুছে যায়নি** এবং
+নিরাপত্তার জন্য bot বন্ধ রাখা হয়েছে। `/api/v1/telegram/status`-এর `lastError`
+দেখুন, তারপর UI-এর Snapshots লিস্ট থেকে আগের একটা ভালো snapshot বেছে **Restore**
+করুন।
+
+সমস্যা মিটে গেলে (বা লোকাল ডেটা নিয়েই চালাতে চাইলে) Telegram Cloud ট্যাবে
+**"Continue with local data"** বাটন চাপুন — এতে `restore_failed` অবস্থা কেটে
+যায়, Telegram bot আবার চালু হয় আর auto-snapshot ফিরে আসে। আগে এর জন্য পুরো
+service restart করা লাগত।
+
+### Restore হয়েছে বলছে, কিন্তু AI পুরনো উত্তরই দিচ্ছে
+
+এটা একটা বাগ ছিল — restore-এর পর in-memory AI model reload হতো না। এখন প্রতিটি
+সফল restore-এর পর model স্বয়ংক্রিয়ভাবে reload হয় এবং log-এ
+`♻️ Restore applied and AI model reloaded — …` লেখা আসে। এই লাইনটা log-এ
+খুঁজে দেখুন; না থাকলে পুরনো build চলছে, redeploy করুন।
 
 ### Snapshot "skipped" বলছে
 
