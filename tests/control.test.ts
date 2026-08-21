@@ -76,6 +76,10 @@ test("dataset stats count chat pairs and break messages down by source", () => {
 
 test("exportDatasetJsonl turns user→ai pairs into ShareGPT-style JSONL", () => {
   const db = createMemoryDatabase();
+  // chat_messages.session_id is a real foreign key — the conversations must
+  // exist first, otherwise the insert fails with SQLITE_CONSTRAINT_FOREIGNKEY.
+  db.prepare("INSERT INTO conversations (id, title) VALUES (1, 'first')").run();
+  db.prepare("INSERT INTO conversations (id, title) VALUES (2, 'second')").run();
   db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (1, 'user', 'hello')").run();
   db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (1, 'ai', 'hi!')").run();
   db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (1, 'user', 'how are you?')").run();

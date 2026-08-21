@@ -269,6 +269,107 @@ def shrink_for_oom(args) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# 0c. LIVE REPORTING — push progress to the MY-AI control panel
+# ---------------------------------------------------------------------------
+
+
+class PanelReporter:
+    """Best-effort heartbeat to the MY-AI control panel.
+
+    Training runs on a free Colab/Kaggle GPU; the control panel runs on
+    Render. This posts a tiny JSON blob every few steps so the Training page
+    can show a live progress bar, loss curve and ETA for a run that is
+    happening somewhere else entirely.
+
+    Every failure is swallowed: a flaky network must never kill a 5-hour
+    training run.
+    """
+
+    def __init__(self, url: str | None, token: str | None, run_id: str,
+                 platform: str = "colab", every_steps: int = 5):
+        self.url = (url or "").strip().rstrip("/")
+        if self.url and not self.url.endswith("/api/v1/training/gpu/report"):
+            self.url = self.url + "/api/v1/training/gpu/report"
+        self.token = (token or "").strip()
+        self.run_id = run_id
+        self.platform = platform
+        self.every_steps = max(1, every_steps)
+        self.enabled = bool(self.url)
+        self._fails = 0
+        self._base: dict = {}
+        if self.enabled:
+            print(f"📡 Live reporting → {self.url}  (run {run_id})")
+
+    def set_base(self, **fields) -> None:
+        """Fields resent with every heartbeat (gpu, model, batch size…)."""
+        self._base.update({k: v for k, v in fields.items() if v is not None})
+
+    def send(self, **fields) -> None:
+        if not self.enabled or self._fails >= 8:
+            return
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        payload = dict(self._base)
+        payload.update(fields)
+        payload["runId"] = self.run_id
+        payload["platform"] = self.platform
+        data = _json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(self.url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+        if self.token:
+            req.add_header("x-admin-token", self.token)
+        try:
+            with urllib.request.urlopen(req, timeout=8):
+                self._fails = 0
+        except Exception as exc:
+            self._fails += 1
+            if self._fails in (1, 8):
+                why = getattr(exc, "reason", exc)
+                print(f"📡 (reporting failed: {why}"
+                      + ("; giving up, training continues)" if self._fails >= 8 else ")"))
+
+
+def make_report_callback(reporter: "PanelReporter", deadline_ts: float | None):
+    """TrainerCallback that streams step/loss/ETA to the control panel."""
+    from transformers import TrainerCallback
+
+    class ReportCallback(TrainerCallback):
+        def __init__(self):
+            self.start = time.time()
+            self.last_loss = None
+
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            if logs and "loss" in logs:
+                try:
+                    self.last_loss = float(logs["loss"])
+                except (TypeError, ValueError):
+                    pass
+            return control
+
+        def on_step_end(self, args, state, control, **kwargs):
+            step = int(state.global_step or 0)
+            if step % reporter.every_steps and step != 1:
+                return control
+            elapsed = time.time() - self.start
+            per_step = elapsed / max(1, step)
+            reporter.send(
+                phase="training",
+                step=step,
+                totalSteps=int(state.max_steps or 0),
+                loss=self.last_loss,
+                learningRate=(state.log_history[-1].get("learning_rate")
+                              if state.log_history else None),
+                secondsPerStep=round(per_step, 3),
+                budgetSecondsLeft=(round(deadline_ts - time.time()) if deadline_ts else None),
+            )
+            return control
+
+    return ReportCallback()
+
+
+# ---------------------------------------------------------------------------
 # 1. DATA
 # ---------------------------------------------------------------------------
 
@@ -802,6 +903,14 @@ def main() -> None:
     ap.add_argument("--test-prompt", action="append", default=None,
                     help="Extra test prompt (repeatable)")
     ap.add_argument("--skip-tests", action="store_true")
+    # live reporting to the MY-AI control panel
+    ap.add_argument("--report-url", default=os.environ.get("MYAI_PANEL_URL", ""),
+                    help="MY-AI panel URL — live progress shows on the Training page")
+    ap.add_argument("--report-token", default=os.environ.get("MYAI_ADMIN_TOKEN", ""),
+                    help="ADMIN_PASSWORD of the panel (sent as x-admin-token)")
+    ap.add_argument("--report-every", type=int, default=5, help="Heartbeat every N steps")
+    ap.add_argument("--run-id", default=None, help="Run id shown in the panel")
+    ap.add_argument("--platform", default="colab", help="colab | kaggle | local")
     args = ap.parse_args()
 
     if args.lora_alpha is None:
@@ -825,6 +934,19 @@ def main() -> None:
     FastLanguageModel, torch, Dataset = load_unsloth()
     apply_memory_caps(args, torch)
 
+    reporter = PanelReporter(args.report_url, args.report_token,
+                             run_id=args.run_id or f"{args.platform}-{int(overall_start)}",
+                             platform=args.platform, every_steps=args.report_every)
+    reporter.set_base(
+        model=args.model,
+        recipe=args.recipe or "files",
+        gpu=(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"),
+        vramGb=round(gpu_total_gb(torch), 1) or None,
+        ramGb=round(host_ram_gb(), 1) or None,
+    )
+    globals()["_REPORTER"] = reporter   # so the __main__ guard can report crashes
+    reporter.send(phase="data", event="ট্রেনিং শুরু — ডাটা প্রস্তুত হচ্ছে")
+
     print("\n===== STEP 1/4 — DATA =====")
     train_rows, val_rows = collect_rows(args)
     n_train_rows, n_val_rows = len(train_rows), len(val_rows)
@@ -837,6 +959,8 @@ def main() -> None:
         val_rows = val_rows[:args.max_eval_rows]
 
     print("\n===== STEP 2/4 — MODEL =====")
+    reporter.send(phase="model", trainRows=n_train_rows, valRows=n_val_rows,
+                  event=f"ডাটা রেডি: {n_train_rows} train / {n_val_rows} val — মডেল লোড হচ্ছে")
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=args.model,
         max_seq_length=args.max_seq_length,
@@ -932,6 +1056,13 @@ def main() -> None:
         trainer = make_trainer(model, tokenizer, train_ds, eval_ds, cfg)
         if train_deadline:
             trainer.add_callback(make_time_callback(train_deadline))
+        if reporter.enabled:
+            trainer.add_callback(make_report_callback(reporter, train_deadline))
+        reporter.set_base(batchSize=args.batch_size, gradAccum=args.grad_accum,
+                          maxSeqLength=args.max_seq_length, packing=args.packing,
+                          oomRetries=attempt)
+        reporter.send(phase="training", totalSteps=max_steps, step=0,
+                      event=f"ট্রেনিং চলছে — {max_steps} step, batch {args.batch_size}×{args.grad_accum}")
 
         print(f"🚀 Training…{gpu_memory_note(torch)}\n")
         try:
@@ -947,6 +1078,8 @@ def main() -> None:
                           "   পরের ধাপ: ছোট মডেল নিন —\n"
                           "     --model unsloth/Qwen2.5-0.5B-Instruct\n"
                           "   অথবা: --max-seq-length 512 --batch-size 1 --no-eval --no-packing")
+                reporter.send(phase="failed", eventLevel="error",
+                              event=f"ট্রেনিং ব্যর্থ: {str(exc).splitlines()[0][:200]}")
                 raise
             attempt += 1
             # Free the dead trainer FIRST, then shrink and rebuild.
@@ -973,8 +1106,11 @@ def main() -> None:
             print(f"\n🛟 OOM ধরা পড়েছে (চেষ্টা {attempt}/{args.oom_retries}) — "
                   f"{step_down}, তারপর আবার চলছে"
                   + (f" ({resume_from} থেকে)" if resume_from else "") + ".")
+            reporter.send(phase="oom-recovery", oomRetries=attempt, eventLevel="warn",
+                          event=f"OOM (চেষ্টা {attempt}/{args.oom_retries}) — {step_down}")
 
     print("\n===== STEP 4/4 — SAVE + EXPORT =====")
+    reporter.send(phase="saving", event="ট্রেনিং শেষ — মডেল সেভ হচ্ছে")
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(str(out))
@@ -1027,18 +1163,34 @@ def main() -> None:
         free_memory(torch, "after merge")
 
     if args.export_gguf:
+        reporter.send(phase="export", event="GGUF এক্সপোর্ট চলছে (৫–১৫ মিনিট)…")
         export_gguf(model, tokenizer, torch, out, args)
 
 
     if not args.skip_tests:
+        reporter.send(phase="testing", event="টেস্ট প্রশ্ন চালানো হচ্ছে")
         prompts = DEFAULT_TEST_PROMPTS + (args.test_prompt or [])
         run_tests(model, tokenizer, torch, prompts, str(out))
 
     total_min = (time.time() - overall_start) / 60
+    reporter.send(phase="done", step=max_steps, totalSteps=max_steps,
+                  event=f"🎉 শেষ! {total_min:.0f} মিনিটে — মডেল সেভ হয়েছে {out}")
     print(f"\n🎉 DONE in {total_min:.0f} minutes ({total_min / 60:.2f} h).")
     print(f"   Model: {out}")
     print("   Next: zip it, download it, then →  ollama create my-ai -f Modelfile")
 
 
+_REPORTER: "PanelReporter | None" = None
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except BaseException as _exc:                     # noqa: BLE001 - report then re-raise
+        if _REPORTER is not None and _REPORTER.enabled:
+            _REPORTER.send(phase="failed", eventLevel="error",
+                           event=f"{type(_exc).__name__}: {str(_exc).splitlines()[0][:200]}"
+                                 if str(_exc) else type(_exc).__name__)
+        raise

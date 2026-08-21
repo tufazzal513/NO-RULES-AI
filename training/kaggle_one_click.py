@@ -24,11 +24,16 @@ os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
 
 # ─── ১) সেটিংস ──────────────────────────────────────────────
 PLAN     = 'balanced'   # basic | balanced | advanced
-HOURS    = 3            # 1 / 3 / 5 ঘণ্টা
+HOURS    = 5            # 1 / 3 / 5 ঘণ্টা
 MODEL    = 'unsloth/Qwen2.5-1.5B-Instruct'   # শক্তিশালী: unsloth/Qwen2.5-3B-Instruct
 ASSISTANT_NAME = 'MY-AI'
 OWNER_NAME     = ''     # আপনার নাম
 EXPORT_GGUF    = True
+
+# ─── লাইভ মনিটরিং: MY-AI কন্ট্রোল প্যানেলে progress দেখুন ────
+PANEL_URL      = ''   # যেমন: 'https://no-rules-ai.onrender.com'
+PANEL_TOKEN    = ''   # প্যানেলের ADMIN_PASSWORD (সেট করা থাকলে)
+RUN_ID = os.environ.get('MYAI_RUN_ID') or f'kaggle-{int(__import__("time").time())}'
 
 OUTPUT_DIR = '/kaggle/working/my-ai-model'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -122,7 +127,10 @@ def run_training(extra_args, resume):
            '--time-budget-hours', str(HOURS), '--max-seq-length', str(SEQ),
            '--assistant-name', ASSISTANT_NAME, '--owner-name', OWNER_NAME,
            '--extra-jsonl', 'bangla-english-banglish-chat.jsonl',
-           '--output', OUTPUT_DIR] + extras + extra_args
+           '--output', OUTPUT_DIR,
+           '--run-id', RUN_ID, '--platform', 'kaggle'] + extras + extra_args
+    if PANEL_URL:
+        cmd += ['--report-url', PANEL_URL, '--report-token', PANEL_TOKEN]
     if ROWS_CAP:
         cmd += ['--rows', str(ROWS_CAP)]
     if EXPORT_GGUF:

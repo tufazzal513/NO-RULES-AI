@@ -100,10 +100,66 @@ const relTime = (iso?: string | null) => {
   return `${Math.round(h / 24)}d ago`;
 };
 
+/** "2h 14m" / "9m 30s" — for GPU-training ETA and elapsed time. */
+const fmtDuration = (seconds?: number | null) => {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds) || seconds < 0) return "—";
+  const s = Math.round(seconds);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+};
+
+/** Phase → Bangla label + colour, for the GPU-training card. */
+const GPU_PHASES: Record<string, { label: string; tone: string }> = {
+  starting: { label: "শুরু হচ্ছে", tone: "#fdd663" },
+  data: { label: "ডাটা তৈরি", tone: "#fdd663" },
+  model: { label: "মডেল লোড", tone: "#fdd663" },
+  probe: { label: "স্পিড প্রোব", tone: "#8ab4f8" },
+  training: { label: "ট্রেনিং চলছে", tone: "#8ab4f8" },
+  "oom-recovery": { label: "OOM রিকভারি", tone: "#f28b82" },
+  saving: { label: "সেভ হচ্ছে", tone: "#81c995" },
+  export: { label: "GGUF এক্সপোর্ট", tone: "#81c995" },
+  testing: { label: "টেস্ট চলছে", tone: "#81c995" },
+  done: { label: "শেষ ✅", tone: "#81c995" },
+  failed: { label: "ব্যর্থ", tone: "#f28b82" },
+};
+
+/** Tiny inline loss curve — no chart library, just an SVG polyline. */
+function LossSparkline({ samples }: { samples: { step: number; loss: number | null }[] }) {
+  const pts = samples.filter((s) => typeof s.loss === "number" && Number.isFinite(s.loss as number));
+  if (pts.length < 2) {
+    return <div className="h-14 flex items-center justify-center text-[11px] text-[#9aa0a6]">loss curve আসছে…</div>;
+  }
+  const losses = pts.map((p) => p.loss as number);
+  const min = Math.min(...losses);
+  const max = Math.max(...losses);
+  const span = max - min || 1;
+  const w = 100;
+  const h = 100;
+  const d = pts
+    .map((p, i) => {
+      const x = (i / (pts.length - 1)) * w;
+      const y = h - (((p.loss as number) - min) / span) * h;
+      return `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+  return (
+    <div className="relative h-14">
+      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="w-full h-full">
+        <path d={`${d} L${w},${h} L0,${h} Z`} fill="#8ab4f8" opacity="0.12" />
+        <path d={d} fill="none" stroke="#8ab4f8" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+      </svg>
+      <span className="absolute top-0 right-0 text-[10px] text-[#9aa0a6]">{max.toFixed(3)}</span>
+      <span className="absolute bottom-0 right-0 text-[10px] text-[#81c995]">{min.toFixed(3)}</span>
+    </div>
+  );
+}
+
 /** Friendly labels for the training triggers recorded in the journal. */
 const TRAIN_TRIGGERS: Record<string, { label: string; icon: string }> = {
-  manual: { label: "Manual", icon: "▶️" },
-  ingest: { label: "File import", icon: "📂" },
+  manual: { label: "Manual", icon: "▶️" },  ingest: { label: "File import", icon: "📂" },
   knowledge: { label: "Knowledge added", icon: "📚" },
   memory: { label: "Memory saved", icon: "🧠" },
   chat: { label: "Chat message", icon: "💬" },
@@ -453,7 +509,7 @@ function ChatView({
             <button
               onClick={() => fileRef.current?.click()}
               title="Attach a text file (saved as a knowledge document)"
-              className="p-2.5 text-[#3c4043] hover:bg-[#282a2c] rounded-full transition-colors shrink-0"
+              className="p-2.5 text-[#c4c7c5] hover:bg-[#282a2c] hover:text-[#e8eaed] rounded-full transition-colors shrink-0"
             >
               <Paperclip size={20} />
             </button>
@@ -473,7 +529,7 @@ function ChatView({
               <button
                 onClick={startMic}
                 title="Voice input"
-                className={`p-2.5 rounded-full transition-colors shrink-0 ${listening ? "text-[#8ab4f8] bg-[#243a5c]" : "text-[#3c4043] hover:bg-[#282a2c]"}`}
+                className={`p-2.5 rounded-full transition-colors shrink-0 ${listening ? "text-[#8ab4f8] bg-[#243a5c]" : "text-[#c4c7c5] hover:bg-[#282a2c] hover:text-[#e8eaed]"}`}
               >
                 <Mic size={20} />
               </button>
@@ -527,6 +583,28 @@ function StatChip({ label, value, sub }: { label: string; value: React.ReactNode
       <div className="mt-1 text-lg font-medium text-[#e8eaed]">{value}</div>
       {sub && <div className="mt-0.5 text-[11px] text-[#9aa0a6]">{sub}</div>}
     </div>
+  );
+}
+
+/** Compact stat used inside cards (GPU training metrics). */
+function MiniStat({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="bg-[#282a2c] border border-[#3c4043] rounded-xl px-3 py-2">
+      <div className="text-[10px] text-[#9aa0a6] uppercase tracking-wider">{label}</div>
+      <div className="mt-0.5 text-[13px] font-medium text-[#e8eaed] truncate">{value}</div>
+    </div>
+  );
+}
+
+/** Small rounded label for run metadata (GPU name, batch size…). */
+function Tag({ children, tone = "#9aa0a6" }: { children: React.ReactNode; tone?: string }) {
+  return (
+    <span
+      className="inline-flex items-center text-[10px] px-2 py-0.5 rounded-full bg-[#282a2c] border border-[#3c4043]"
+      style={{ color: tone }}
+    >
+      {children}
+    </span>
   );
 }
 
@@ -946,6 +1024,56 @@ export default function App() {
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [training.running, training.scheduled]);
+
+  // ---- GPU training (Colab / Kaggle LoRA fine-tune) — live from far away ----
+  const [gpu, setGpu] = useState<any>({ current: null, runs: [] });
+  const gpuRunning = !!gpu?.current?.running;
+
+  const fetchGpu = async () => {
+    try {
+      setGpu((await api("/api/v1/training/gpu")) ?? { current: null, runs: [] });
+    } catch {
+      /* keep last */
+    }
+  };
+
+  useEffect(() => {
+    fetchGpu();
+    const interval = setInterval(fetchGpu, gpuRunning ? 3000 : 15000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gpuRunning]);
+
+  const clearGpuRuns = async () => {
+    try {
+      await api("/api/v1/training/gpu", { method: "DELETE" });
+      await fetchGpu();
+      showToast("GPU run history cleared");
+    } catch (e: any) {
+      showToast("⚠️ " + e.message);
+    }
+  };
+
+  /** Copy a ready-to-paste Colab cell with this panel's URL + token filled in. */
+  const copyColabCell = async () => {
+    const token = sessionStorage.getItem(ADMIN_TOKEN_KEY) ?? "";
+    const cell = [
+      "# MY-AI — এক-ক্লিক GPU ট্রেনিং (Google Colab · T4)",
+      "# Runtime → Change runtime type → T4 GPU → Save, তারপর ▶ Run",
+      "import urllib.request",
+      "url = 'https://raw.githubusercontent.com/tufazzal513/NO-RULES-AI/main/training/colab_one_click.py'",
+      "src = urllib.request.urlopen(url).read().decode()",
+      `src = src.replace("PANEL_URL      = ''", "PANEL_URL      = ${JSON.stringify(window.location.origin)}")`,
+      `src = src.replace("PANEL_TOKEN    = ''", "PANEL_TOKEN    = ${JSON.stringify(token)}")`,
+      "exec(compile(src, 'colab_one_click.py', 'exec'))",
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(cell);
+      showToast("Colab cell কপি হয়েছে — Colab-এ পেস্ট করে Run দিন 🚀");
+    } catch {
+      showToast("⚠️ কপি করা গেল না — ব্রাউজার ব্লক করেছে");
+    }
+  };
 
   /** Push pasted text as training data — same pipeline as a file import. */
   const pushPasteData = async () => {
@@ -1490,6 +1618,27 @@ export default function App() {
       <StatChip label="Active Model" value={health.model} sub={aiStatus.trained ? `Trained · ${aiStatus.modelChains ?? 0} chains` : "Not trained yet"} />
       <StatChip label="Telegram Storage" value={health.telegram} sub={tgStatus.botUsername ? `@${tgStatus.botUsername}` : "Backups via Telegram"} />
 
+      {gpu?.current && (
+        <Card title="GPU fine-tune (Colab / Kaggle)" icon={<Sparkle size={16} />} className="md:col-span-2 xl:col-span-4">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div className="text-[13px] text-[#e8eaed] min-w-0 truncate">
+              {(GPU_PHASES[gpu.current.phase]?.label ?? gpu.current.phase)}
+              {gpu.current.totalSteps > 0 && <span className="text-[#9aa0a6]"> · step {gpu.current.step}/{gpu.current.totalSteps}</span>}
+              {gpu.current.etaSeconds !== null && <span className="text-[#9aa0a6]"> · ETA {fmtDuration(gpu.current.etaSeconds)}</span>}
+            </div>
+            <button onClick={() => selectTab("training")} className="shrink-0 text-[12px] text-[#8ab4f8] hover:underline">
+              বিস্তারিত →
+            </button>
+          </div>
+          <div className="h-2 rounded-full bg-[#282a2c] overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${gpu.current.running ? "train-stripe" : ""}`}
+              style={{ width: `${gpu.current.progress}%`, background: GPU_PHASES[gpu.current.phase]?.tone ?? "#8ab4f8" }}
+            />
+          </div>
+        </Card>
+      )}
+
       <Card title="System metrics" icon={<LayoutDashboard size={16} className="text-[#8ab4f8]" />} className="md:col-span-2 xl:col-span-3">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <StatChip label="Total Users" value={health.stats?.totalUsers ?? "…"} />
@@ -1516,7 +1665,7 @@ export default function App() {
           >
             🌱 Seed Test User
           </button>
-          <button onClick={() => selectTab("training")} className="w-full py-2.5 bg-[#1e1f20] hover:bg-[#282a2c] text-[#3c4043] rounded-xl text-[13px] font-medium transition-colors">
+          <button onClick={() => selectTab("training")} className="w-full py-2.5 bg-[#1e1f20] hover:bg-[#282a2c] text-[#e8eaed] border border-[#3c4043] rounded-xl text-[13px] font-medium transition-colors">
             🎓 Open Training
           </button>
         </div>
@@ -1581,7 +1730,7 @@ export default function App() {
           icon={<Search size={16} className="text-[#8ab4f8]" />}
           className="md:col-span-2"
           right={
-            <button onClick={() => resetResearch(true)} className="px-3 py-1.5 bg-[#1e1f20] hover:bg-[#282a2c] text-[#3c4043] rounded-lg text-xs font-medium transition-colors">
+            <button onClick={() => resetResearch(true)} className="px-3 py-1.5 bg-[#1e1f20] hover:bg-[#282a2c] text-[#e8eaed] border border-[#3c4043] rounded-lg text-xs font-medium transition-colors">
               Clear Cache
             </button>
           }
@@ -1698,6 +1847,123 @@ export default function App() {
 
     return (
       <div className="space-y-4">
+        {/* ---- GPU training (Colab / Kaggle) — the real LoRA fine-tune ---- */}
+        {(() => {
+          const g = gpu?.current as any;
+          const meta = GPU_PHASES[g?.phase] ?? { label: g?.phase ?? "—", tone: "#9aa0a6" };
+          const pill = !g
+            ? { text: "No GPU run", bg: "#282a2c", fg: "#9aa0a6", dot: false }
+            : g.running
+            ? { text: meta.label, bg: "#1a2b45", fg: "#8ab4f8", dot: true }
+            : g.stalled
+            ? { text: "Stalled — Colab disconnect?", bg: "#3c2f14", fg: "#fdd663", dot: false }
+            : g.ok
+            ? { text: "শেষ ✅", bg: "#173f2a", fg: "#81c995", dot: false }
+            : { text: "ব্যর্থ", bg: "#4a1f1c", fg: "#f28b82", dot: false };
+          return (
+            <Card
+              title="GPU training (Colab / Kaggle) — live"
+              icon={<Sparkle size={16} />}
+              right={
+                <div className="flex items-center gap-2">
+                  <span
+                    className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full"
+                    style={{ background: pill.bg, color: pill.fg }}
+                  >
+                    {pill.dot && <span className="w-1.5 h-1.5 rounded-full soft-pulse" style={{ background: pill.fg }} />}
+                    {pill.text}
+                  </span>
+                  <button
+                    onClick={copyColabCell}
+                    className="px-3 py-1.5 bg-[#1a73e8] hover:bg-[#2b7de2] text-white rounded-lg text-xs font-medium transition-colors flex items-center gap-1"
+                    title="Colab-এ পেস্ট করার জন্য রেডি সেল কপি করুন"
+                  >
+                    <Copy size={12} /> Copy Colab cell
+                  </button>
+                  {(gpu?.runs?.length ?? 0) > 0 && (
+                    <button
+                      onClick={clearGpuRuns}
+                      title="Clear GPU run history"
+                      className="px-2.5 py-1.5 bg-[#1e1f20] hover:bg-[#282a2c] text-[#e8eaed] border border-[#3c4043] rounded-lg text-xs transition-colors"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  )}
+                </div>
+              }
+            >
+              {!g ? (
+                <div className="text-[13px] text-[#9aa0a6] leading-relaxed">
+                  এখনো কোনো GPU ট্রেনিং রিপোর্ট আসেনি।{" "}
+                  <span className="text-[#e8eaed]">“Copy Colab cell”</span> চেপে Colab-এ পেস্ট করে Run দিন —
+                  ট্রেনিং শুরু হলেই এখানে step, loss, ETA সব লাইভ দেখতে পাবেন।
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-end justify-between mb-1.5 gap-3">
+                    <div className="text-[13px] text-[#e8eaed] min-w-0">
+                      <span className="font-medium" style={{ color: meta.tone }}>{meta.label}</span>
+                      {g.totalSteps > 0 && (
+                        <span className="text-[#9aa0a6]"> · step {g.step}/{g.totalSteps}</span>
+                      )}
+                      {g.loss !== null && <span className="text-[#9aa0a6]"> · loss {Number(g.loss).toFixed(4)}</span>}
+                    </div>
+                    <div className="text-[12px] text-[#9aa0a6] shrink-0">{g.progress}%</div>
+                  </div>
+                  <div className="h-2.5 rounded-full bg-[#282a2c] overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${g.running ? "train-stripe" : ""}`}
+                      style={{ width: `${g.progress}%`, background: meta.tone }}
+                    />
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <MiniStat label="ETA বাকি" value={fmtDuration(g.etaSeconds)} />
+                    <MiniStat label="চলছে" value={fmtDuration(g.elapsedSeconds)} />
+                    <MiniStat label="Best loss" value={g.bestLoss !== null ? Number(g.bestLoss).toFixed(4) : "—"} />
+                    <MiniStat label="সেকেন্ড/step" value={g.secondsPerStep ? `${Number(g.secondsPerStep).toFixed(2)}s` : "—"} />
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <div className="text-[11px] font-medium text-[#9aa0a6] mb-1 uppercase tracking-wider">Loss curve</div>
+                      <LossSparkline samples={g.samples ?? []} />
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {g.gpu && <Tag>{g.gpu}{g.vramGb ? ` · ${g.vramGb}GB` : ""}</Tag>}
+                        {g.model && <Tag>{String(g.model).split("/").pop()}</Tag>}
+                        {g.batchSize && <Tag>batch {g.batchSize}×{g.gradAccum ?? 1}</Tag>}
+                        {g.maxSeqLength && <Tag>seq {g.maxSeqLength}</Tag>}
+                        {g.trainRows && <Tag>{g.trainRows} rows</Tag>}
+                        {g.oomRetries > 0 && <Tag tone="#f28b82">OOM ×{g.oomRetries}</Tag>}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-medium text-[#9aa0a6] mb-1 uppercase tracking-wider">Events</div>
+                      <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
+                        {(g.events ?? []).length === 0 && <div className="text-[11px] text-[#9aa0a6]">No events yet.</div>}
+                        {[...(g.events ?? [])].reverse().map((e: any, i: number) => (
+                          <div key={i} className="flex items-start gap-2 text-[11px]">
+                            <span className="text-[#9aa0a6] shrink-0 font-mono">{new Date(e.at).toLocaleTimeString()}</span>
+                            <span className={e.level === "error" ? "text-[#f28b82]" : e.level === "warn" ? "text-[#fdd663]" : "text-[#e8eaed]"}>
+                              {e.message}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      {g.stalled && (
+                        <div className="mt-2 text-[11px] text-[#fdd663] bg-[#3c2f14] border border-[#5c4a1e] rounded-lg p-2 leading-relaxed">
+                          {fmtDuration(Math.round(g.ageMs / 1000))} ধরে কোনো খবর নেই — Colab ডিসকানেক্ট হয়ে থাকতে পারে।
+                          Colab-এ গিয়ে সেলটা আবার Run দিন, শেষ checkpoint থেকেই চালু হবে।
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </Card>
+          );
+        })()}
+
         {/* ---- Background training — live view of the AI training itself ---- */}
         <Card
           title="Background training — live"
@@ -2134,10 +2400,10 @@ export default function App() {
             >
               ♻️ Restore Latest
             </button>
-            <button onClick={() => tgAction("sync")} disabled={busy} className="w-full py-2.5 bg-[#1e1f20] hover:bg-[#282a2c] text-[#3c4043] rounded-xl text-[13px] font-medium transition-all disabled:opacity-50">
+            <button onClick={() => tgAction("sync")} disabled={busy} className="w-full py-2.5 bg-[#1e1f20] hover:bg-[#282a2c] text-[#e8eaed] border border-[#3c4043] rounded-xl text-[13px] font-medium transition-all disabled:opacity-50">
               🔄 Mirror All Records to Telegram
             </button>
-            <a href="/api/v1/telegram/snapshot/download" className="block w-full py-2.5 text-center bg-[#1e1f20] hover:bg-[#282a2c] text-[#3c4043] rounded-xl text-[13px] font-medium transition-all">
+            <a href="/api/v1/telegram/snapshot/download" className="block w-full py-2.5 text-center bg-[#1e1f20] hover:bg-[#282a2c] text-[#e8eaed] border border-[#3c4043] rounded-xl text-[13px] font-medium transition-all">
               ⬇️ Download Snapshot (JSON)
             </a>
             <input
@@ -2215,7 +2481,7 @@ export default function App() {
             <button onClick={() => resetResearch(false)} className="px-3 py-2 bg-[#1a2b45] hover:bg-[#243a5c] text-[#8ab4f8] rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5">
               <RefreshCw size={13} /> Reset Cooldowns
             </button>
-            <button onClick={() => resetResearch(true)} className="px-3 py-2 bg-[#1e1f20] hover:bg-[#282a2c] text-[#3c4043] rounded-lg text-xs font-medium transition-colors">
+            <button onClick={() => resetResearch(true)} className="px-3 py-2 bg-[#1e1f20] hover:bg-[#282a2c] text-[#e8eaed] border border-[#3c4043] rounded-lg text-xs font-medium transition-colors">
               Clear Research Cache
             </button>
           </div>
@@ -2275,7 +2541,7 @@ export default function App() {
         title="Recent activity"
         icon={<Terminal size={16} className="text-[#8ab4f8]" />}
         right={
-          <button onClick={() => loadPageData("logs")} className="px-3 py-1.5 bg-[#1e1f20] hover:bg-[#282a2c] text-[#3c4043] rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5">
+          <button onClick={() => loadPageData("logs")} className="px-3 py-1.5 bg-[#1e1f20] hover:bg-[#282a2c] text-[#e8eaed] border border-[#3c4043] rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5">
             <RefreshCw size={13} /> Refresh
           </button>
         }
@@ -2348,7 +2614,7 @@ export default function App() {
               <Sparkle size={22} />
               <span className="text-[18px] font-medium tracking-tight text-[#e8eaed]">MY<span className="text-[#4E7DF5]">-AI</span></span>
             </div>
-            <button className="md:hidden p-1.5 text-[#3c4043] hover:bg-[#282a2c] rounded-full" onClick={() => setSidebarOpen(false)}>
+            <button className="md:hidden p-1.5 text-[#c4c7c5] hover:bg-[#282a2c] hover:text-[#e8eaed] rounded-full" onClick={() => setSidebarOpen(false)}>
               <X size={18} />
             </button>
           </div>
@@ -2360,7 +2626,7 @@ export default function App() {
               selectTab("chat");
             }}
             title="New chat (⌘/Ctrl + Shift + O)"
-            className="mt-4 w-full flex items-center gap-2.5 bg-[#394457] hover:bg-[#3c4a63] text-[#394457] rounded-full px-4 py-2.5 text-[14px] font-medium transition-colors"
+            className="mt-4 w-full flex items-center gap-2.5 bg-[#394457] hover:bg-[#3c4a63] text-[#e3e9f5] rounded-full px-4 py-2.5 text-[14px] font-medium transition-colors"
           >
             <Plus size={18} strokeWidth={2.5} />
             New chat
@@ -2370,7 +2636,7 @@ export default function App() {
           <button
             onClick={() => setSearchOpen(true)}
             title="Search chat history (⌘/Ctrl + K)"
-            className="mt-2 w-full flex items-center gap-2.5 text-[#3c4043] hover:bg-[#282a2c] rounded-full px-4 py-2 text-[13px] transition-colors"
+            className="mt-2 w-full flex items-center gap-2.5 text-[#c4c7c5] hover:bg-[#282a2c] hover:text-[#e8eaed] rounded-full px-4 py-2 text-[13px] transition-colors"
           >
             <Search size={16} />
             <span className="flex-1 text-left">Search chats</span>
@@ -2397,7 +2663,7 @@ export default function App() {
             <div
               key={s.id}
               className={`group flex items-center gap-1 rounded-full px-3 py-2 mb-0.5 cursor-pointer transition-colors ${
-                tab === "chat" && activeId === s.id ? "bg-[#394457] text-[#394457]" : "text-[#3c4043] hover:bg-[#282a2c]"
+                tab === "chat" && activeId === s.id ? "bg-[#394457] text-[#e3e9f5]" : "text-[#c4c7c5] hover:bg-[#282a2c] hover:text-[#e8eaed]"
               }`}
               onClick={() => {
                 if (renamingId === s.id) return;
@@ -2468,11 +2734,21 @@ export default function App() {
               key={n.name}
               onClick={() => selectTab(n.name)}
               className={`w-full flex items-center gap-3 rounded-full px-3 py-2 mb-0.5 text-[13px] transition-colors ${
-                tab === n.name ? "bg-[#394457] text-[#394457]" : "text-[#3c4043] hover:bg-[#282a2c]"
+                tab === n.name ? "bg-[#394457] text-[#e3e9f5]" : "text-[#c4c7c5] hover:bg-[#282a2c] hover:text-[#e8eaed]"
               }`}
             >
               {n.icon}
-              {n.label}
+              <span className="flex-1 text-left">{n.label}</span>
+              {/* Live badge — the GPU fine-tune is running right now. */}
+              {n.name === "training" && gpuRunning && (
+                <span
+                  className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-[#1a2b45] text-[#8ab4f8] shrink-0"
+                  title={`GPU training — ${gpu?.current?.progress ?? 0}%`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#8ab4f8] soft-pulse" />
+                  {Math.round(gpu?.current?.progress ?? 0)}%
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -2490,23 +2766,35 @@ export default function App() {
       <main className="flex-1 flex flex-col min-w-0">
         <header className="h-14 shrink-0 px-3 md:px-5 border-b border-[#3c4043] flex items-center justify-between bg-[#131314]/90 backdrop-blur">
           <div className="flex items-center gap-2 min-w-0">
-            <button className="md:hidden p-2 -ml-1 text-[#3c4043] hover:bg-[#1e1f20] rounded-full" onClick={() => setSidebarOpen(true)}>
+            <button className="md:hidden p-2 -ml-1 text-[#c4c7c5] hover:bg-[#1e1f20] hover:text-[#e8eaed] rounded-full" onClick={() => setSidebarOpen(true)}>
               <Menu size={20} />
             </button>
             <h1 className="text-[16px] font-medium text-[#e8eaed] truncate">{tabTitle}</h1>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {/* Live GPU fine-tune — visible from every page. */}
+            {gpuRunning && (
+              <button
+                onClick={() => selectTab("training")}
+                title={`GPU training — step ${gpu?.current?.step}/${gpu?.current?.totalSteps} · ETA ${fmtDuration(gpu?.current?.etaSeconds)}`}
+                className="hidden sm:inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full bg-[#1a2b45] text-[#8ab4f8] hover:bg-[#243a5c] transition-colors"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-[#8ab4f8] soft-pulse" />
+                GPU {Math.round(gpu?.current?.progress ?? 0)}%
+                <span className="text-[#9aa0a6]">· {fmtDuration(gpu?.current?.etaSeconds)}</span>
+              </button>
+            )}
             <button
               onClick={() => setSearchOpen(true)}
               title="Search chats (⌘/Ctrl + K)"
-              className="p-2 text-[#3c4043] hover:bg-[#1e1f20] rounded-full transition-colors"
+              className="p-2 text-[#c4c7c5] hover:bg-[#1e1f20] hover:text-[#e8eaed] rounded-full transition-colors"
             >
               <Search size={17} />
             </button>
             <button
               onClick={() => setShortcutsOpen(true)}
               title="Keyboard shortcuts (⌘/Ctrl + /)"
-              className="hidden sm:inline-flex p-2 text-[#3c4043] hover:bg-[#1e1f20] rounded-full transition-colors"
+              className="hidden sm:inline-flex p-2 text-[#c4c7c5] hover:bg-[#1e1f20] hover:text-[#e8eaed] rounded-full transition-colors"
             >
               <Keyboard size={17} />
             </button>
@@ -2641,7 +2929,7 @@ export default function App() {
                 ["Double-click on a chat", "Rename"],
               ].map(([k, d]) => (
                 <div key={k} className="flex items-center justify-between gap-3 py-1.5 border-b border-[#3c4043] last:border-0">
-                  <span className="text-[13px] text-[#3c4043]">{d}</span>
+                  <span className="text-[13px] text-[#e8eaed]">{d}</span>
                   <kbd className="text-[11px] text-[#e8eaed] bg-[#1e1f20] border border-[#3c4043] rounded-lg px-2 py-1 whitespace-nowrap">{k}</kbd>
                 </div>
               ))}
