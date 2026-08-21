@@ -1,6 +1,6 @@
 # MY-AI
 
-A self-hosted General AI platform with a built-in REST API and web-based control panel. Designed to be deployed on Render.
+A self-hosted General AI platform with a built-in REST API and web-based control panel. The **runtime is Node.js only** (Express + React/Vite + SQLite). Python is used solely for the optional LoRA training pipeline in [`training/`](./training/). Designed to be deployed on Render.
 
 ## Features
 
@@ -157,6 +157,7 @@ an honest "I don't know yet".
 | Endpoint | Description |
 | --- | --- |
 | `GET /api/v1/research/status` | Which sources are ready / cooling down, cache + negative-cache stats, requests/minute |
+| `GET /api/v1/research/selftest` | Probe every live source (English + বাংলা + Banglish) — per-source pass/fail, latency, sample answer |
 | `POST /api/v1/research` | Force a lookup now — body `{ "topic": "…" }` |
 | `POST /api/v1/research/reset` | Reopen every circuit breaker — body `{ "clearCache": false }` optionally wipes the caches |
 

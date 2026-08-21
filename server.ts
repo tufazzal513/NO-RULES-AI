@@ -13,6 +13,8 @@ import { CloudSync, parseBool } from "./server/cloud-sync.ts";
 import { pushLog, recentLogs } from "./server/logs.ts";
 import { createAdminGate, adminTokenFrom } from "./server/auth.ts";
 import { datasetStats } from "./server/dataset.ts";
+import { planIngest, applyIngest } from "./server/ingest.ts";
+import { applyBuiltInSeed } from "./server/seed.ts";
 
 // Initialize express app
 const app = express();
@@ -885,7 +887,39 @@ app.post("/api/v1/knowledge", (req, res) => {
   try {
     const info = db.prepare("INSERT INTO knowledge (title, content) VALUES (?, ?)").run(title || "Untitled", content.trim());
     tryMirror("knowledge", info.lastInsertRowid, { id: info.lastInsertRowid, title: title || "Untitled", content: content.trim() });
+    ai.scheduleTrain(2000);
     res.json({ success: true, id: Number(info.lastInsertRowid) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Bulk ingest — dump .txt / .md / .jsonl (from another AI, or a Bangla/English
+ * language corpus). Saved as knowledge (+ Q/A pairs when the file is a
+ * transcript). The Markov brain retrains in the background automatically.
+ */
+app.post("/api/v1/ingest", (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
+  if (!requireAdmin(req, res)) return;
+  try {
+    const files = Array.isArray(req.body?.files) ? req.body.files : [];
+    if (files.length === 0) return res.status(400).json({ error: "files[] required — each { name, content }" });
+    const trimmed = files
+      .slice(0, 50)
+      .map((f: any) => ({ name: String(f.name || "untitled.txt"), content: String(f.content || "") }));
+    const plan = planIngest(trimmed);
+    const applied = applyIngest(db, plan, { source: "ingest", conversationTitle: req.body?.title });
+    const knowRows = db.prepare("SELECT id, title, content FROM knowledge ORDER BY id DESC LIMIT ?").all(applied.knowledgeInserted) as any[];
+    for (const row of knowRows) tryMirror("knowledge", row.id, row);
+    if (applied.conversationId) {
+      tryMirror("conversations", applied.conversationId, { id: applied.conversationId, title: req.body?.title || "Ingest" });
+      const msgs = db.prepare("SELECT * FROM chat_messages WHERE session_id = ?").all(applied.conversationId) as any[];
+      for (const m of msgs) tryMirror("chat_messages", m.id, m);
+    }
+    ai.scheduleTrain(800);
+    pushLog("info", "system", `Ingested ${applied.knowledgeInserted} docs, ${applied.pairsInserted} Q/A pairs (${applied.bytes} bytes) — background train scheduled`);
+    res.json({ ok: true, ...applied, chunksPlanned: plan.chunks.length, skippedEmpty: plan.skippedEmpty });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -949,6 +983,16 @@ app.get("/api/v1/research/status", (req, res) => {
     res.json(research.status());
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+/** Probe every live source — used after deploy to see what actually works. */
+app.get("/api/v1/research/selftest", async (req, res) => {
+  try {
+    const report = await research.selftest();
+    res.json({ ok: true, ...report });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
@@ -1164,6 +1208,19 @@ async function startServer() {
     ai.reload();
   } catch (err: any) {
     console.error("❌ Startup restore crashed (continuing with local data):", err?.message || err);
+  }
+  try {
+    const seeded = applyBuiltInSeed(db);
+    if (!seeded.skipped) {
+      ai.train();
+      pushLog(
+        "info",
+        "system",
+        `🌱 Built-in language seed applied — ${seeded.knowledgeInserted} docs, ${seeded.pairsInserted} Q/A pairs; model trained`
+      );
+    }
+  } catch (err: any) {
+    console.warn("⚠️  Built-in seed skipped:", err?.message || err);
   }
   console.log(`🚀 Application state: ${cloud.getState()}`);
   pushLog("info", "system", `🚀 Application state: ${cloud.getState()}`);

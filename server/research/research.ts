@@ -548,6 +548,269 @@ const WIKTIONARY: SourceInstance = {
   },
 };
 
+function haystack(q: ResearchQuery): string {
+  return `${q.primary} ${q.variants.join(" ")}`.toLowerCase();
+}
+
+function isWeatherQuery(q: ResearchQuery): boolean {
+  return /weather|forecast|temperature|humidity|আবহাওয়া|abohawa|brishti|বৃষ্টি|gorom|thanda/.test(haystack(q));
+}
+
+function isCodeQuery(q: ResearchQuery): boolean {
+  return /stack.?overflow|error|exception|javascript|python|typescript|programming|compiler|debug|code sample/.test(haystack(q));
+}
+
+function isBookQuery(q: ResearchQuery): boolean {
+  return /book|author|isbn|novel|library|লেখক|উপন্যাস|lekhok|uponnash/.test(haystack(q));
+}
+
+function isPaperQuery(q: ResearchQuery): boolean {
+  return /arxiv|preprint|doi|physics|neural network|quantum|scientific paper|research paper/.test(haystack(q));
+}
+
+const OPEN_METEO: SourceInstance = {
+  name: "Open-Meteo geocoding",
+  host: "geocoding-api.open-meteo.com",
+  queryFor: (q) => (isWeatherQuery(q) ? latinQuery(q) ?? q.primary : null),
+  buildUrl: (t) => `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(t)}&count=1&language=en&format=json`,
+  parse(body) {
+    if (!body.trim()) return emptyResults();
+    let j: any;
+    try {
+      j = JSON.parse(body);
+    } catch {
+      return null;
+    }
+    const r = j?.results?.[0];
+    if (!r?.name) return emptyResults();
+    const snippet = `${r.name}${r.admin1 ? ", " + r.admin1 : ""}${r.country ? ", " + r.country : ""} (${r.latitude}°, ${r.longitude}°)`;
+    return {
+      answer: cap(`Weather location: ${snippet}`, 400),
+      results: [{ title: r.name, url: `https://open-meteo.com/en/docs#latitude=${r.latitude}&longitude=${r.longitude}`, snippet }],
+    };
+  },
+};
+
+const OPEN_METEO_FORECAST: SourceInstance = {
+  name: "Open-Meteo forecast",
+  host: "api.open-meteo.com",
+  // Needs coordinates; skip unless the query already looks like "lat,lon" — geocoding source covers city names.
+  queryFor: (q) => {
+    if (!isWeatherQuery(q)) return null;
+    const m = haystack(q).match(/(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/);
+    return m ? `${m[1]},${m[2]}` : null;
+  },
+  buildUrl: (t) => {
+    const [lat, lon] = t.split(",");
+    return `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}&current_weather=true`;
+  },
+  parse(body) {
+    if (!body.trim()) return emptyResults();
+    let j: any;
+    try {
+      j = JSON.parse(body);
+    } catch {
+      return null;
+    }
+    const w = j?.current_weather;
+    if (!w) return emptyResults();
+    const snippet = `Temperature ${w.temperature}°C, wind ${w.windspeed} km/h, weather code ${w.weathercode}.`;
+    return {
+      answer: snippet,
+      results: [{ title: "Open-Meteo current weather", url: "https://open-meteo.com/", snippet }],
+    };
+  },
+};
+
+const WIKIDATA: SourceInstance = {
+  name: "Wikidata search",
+  host: "www.wikidata.org",
+  queryFor: (q) => (q.titleLike ? latinQuery(q) ?? q.primary : null),
+  buildUrl: (t) =>
+    `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(t)}&language=en&format=json&limit=3&origin=*`,
+  parse(body) {
+    if (!body.trim()) return emptyResults();
+    let j: any;
+    try {
+      j = JSON.parse(body);
+    } catch {
+      return null;
+    }
+    const hits = ((j?.search ?? []) as any[])
+      .filter((r) => r?.label)
+      .slice(0, 3)
+      .map((r) => ({
+        title: r.label,
+        url: r.concepturi || `https://www.wikidata.org/wiki/${r.id}`,
+        snippet: r.description || r.label,
+      }));
+    if (hits.length === 0) return emptyResults();
+    return { answer: cap(hits[0].snippet, 500), results: hits };
+  },
+};
+
+const WIKIMEDIA_REST: SourceInstance = {
+  name: "Wikimedia REST search",
+  host: "api.wikimedia.org",
+  queryFor: (q) => latinQuery(q),
+  buildUrl: (t) => `https://api.wikimedia.org/core/v1/wikipedia/en/search/page?q=${encodeURIComponent(t)}&limit=3`,
+  parse(body) {
+    if (!body.trim()) return emptyResults();
+    let j: any;
+    try {
+      j = JSON.parse(body);
+    } catch {
+      return null;
+    }
+    const hits = ((j?.pages ?? []) as any[])
+      .filter((r) => r?.title)
+      .slice(0, 3)
+      .map((r) => ({
+        title: r.title,
+        url: `https://en.wikipedia.org/wiki/${encodeURIComponent(String(r.title).replace(/ /g, "_"))}`,
+        snippet: decodeEntities(stripTags(r.excerpt || r.description || r.title)),
+      }));
+    if (hits.length === 0) return emptyResults();
+    return { answer: cap(hits[0].snippet, 500), results: hits };
+  },
+};
+
+const STACK_EXCHANGE: SourceInstance = {
+  name: "Stack Exchange",
+  host: "api.stackexchange.com",
+  queryFor: (q) => (isCodeQuery(q) ? latinQuery(q) ?? q.primary : null),
+  buildUrl: (t) =>
+    `https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=relevance&q=${encodeURIComponent(t)}&site=stackoverflow&pagesize=3&filter=default`,
+  parse(body) {
+    if (!body.trim()) return emptyResults();
+    let j: any;
+    try {
+      j = JSON.parse(body);
+    } catch {
+      return null;
+    }
+    const hits = ((j?.items ?? []) as any[])
+      .filter((r) => r?.link && r?.title)
+      .slice(0, 3)
+      .map((r) => ({
+        title: decodeEntities(stripTags(r.title)),
+        url: String(r.link),
+        snippet: r.body ? decodeEntities(stripTags(String(r.body))).slice(0, 280) : decodeEntities(stripTags(r.title)),
+      }));
+    if (hits.length === 0) return emptyResults();
+    return { answer: cap(hits[0].snippet, 500), results: hits };
+  },
+};
+
+const OPEN_LIBRARY: SourceInstance = {
+  name: "Open Library",
+  host: "openlibrary.org",
+  queryFor: (q) => (isBookQuery(q) ? latinQuery(q) ?? q.primary : null),
+  buildUrl: (t) => `https://openlibrary.org/search.json?q=${encodeURIComponent(t)}&limit=3`,
+  parse(body) {
+    if (!body.trim()) return emptyResults();
+    let j: any;
+    try {
+      j = JSON.parse(body);
+    } catch {
+      return null;
+    }
+    const hits = ((j?.docs ?? []) as any[])
+      .filter((r) => r?.title)
+      .slice(0, 3)
+      .map((r) => ({
+        title: r.title,
+        url: r.key ? `https://openlibrary.org${r.key}` : "https://openlibrary.org/",
+        snippet: [r.author_name?.[0], r.first_publish_year, r.subject?.[0]].filter(Boolean).join(" · "),
+      }));
+    if (hits.length === 0) return emptyResults();
+    return { answer: cap(`${hits[0].title}${hits[0].snippet ? " — " + hits[0].snippet : ""}`, 500), results: hits };
+  },
+};
+
+const ARXIV: SourceInstance = {
+  name: "arXiv",
+  host: "export.arxiv.org",
+  queryFor: (q) => (isPaperQuery(q) ? latinQuery(q) ?? q.primary : null),
+  buildUrl: (t) => `https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(t)}&start=0&max_results=3`,
+  parse(body) {
+    if (!body.trim()) return emptyResults();
+    const results: ResearchSourceHit[] = [];
+    const entryRe = /<entry>([\s\S]*?)<\/entry>/gi;
+    for (const m of body.matchAll(entryRe)) {
+      if (results.length >= 3) break;
+      const block = m[1];
+      const title = decodeEntities(stripTags((block.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || "")).trim();
+      const summary = decodeEntities(stripTags((block.match(/<summary>([\s\S]*?)<\/summary>/) || [])[1] || "")).trim();
+      const id = decodeEntities(stripTags((block.match(/<id>([\s\S]*?)<\/id>/) || [])[1] || "")).trim();
+      if (!title) continue;
+      results.push({ title, url: id || "https://arxiv.org/", snippet: cap(summary, 280) });
+    }
+    if (results.length === 0) return emptyResults();
+    return { answer: cap(results[0].snippet || results[0].title, 500), results };
+  },
+};
+
+function makeHtmlSearchSource(name: string, host: string, urlFor: (t: string) => string): SourceInstance {
+  return {
+    name,
+    host,
+    buildUrl: urlFor,
+    parse(body, url) {
+      if (!body.trim()) return emptyResults();
+      const results: ResearchSourceHit[] = [];
+      const linkRe = /<a[^>]+href="([^"]+)"[^>]*>([\s\S]{8,180}?)<\/a>/gi;
+      for (const m of body.matchAll(linkRe)) {
+        if (results.length >= 3) break;
+        const title = decodeEntities(stripTags(m[2]));
+        if (title.length < 8) continue;
+        let href = decodeEntities(m[1]);
+        try {
+          href = new URL(href, url).toString();
+        } catch {
+          continue;
+        }
+        if (!/^https?:/i.test(href)) continue;
+        if (href.includes(host) || /\/search|\/about|\/preferences|\/settings/i.test(href)) continue;
+        results.push({ title, url: href, snippet: "" });
+      }
+      if (results.length === 0) return emptyResults();
+      return { answer: cap(results[0].title, 500), results };
+    },
+  };
+}
+
+const STARTPAGE: SourceInstance = makeHtmlSearchSource(
+  "Startpage",
+  "www.startpage.com",
+  (t) => `https://www.startpage.com/sp/search?query=${encodeURIComponent(t)}`
+);
+
+const ECOSIA: SourceInstance = makeHtmlSearchSource(
+  "Ecosia",
+  "www.ecosia.org",
+  (t) => `https://www.ecosia.org/search?q=${encodeURIComponent(t)}`
+);
+
+const QWANT: SourceInstance = makeHtmlSearchSource(
+  "Qwant",
+  "www.qwant.com",
+  (t) => `https://www.qwant.com/?q=${encodeURIComponent(t)}`
+);
+
+const EXTRA_SOURCES: SourceInstance[] = [
+  OPEN_METEO,
+  OPEN_METEO_FORECAST,
+  WIKIDATA,
+  WIKIMEDIA_REST,
+  STACK_EXCHANGE,
+  OPEN_LIBRARY,
+  ARXIV,
+  STARTPAGE,
+  ECOSIA,
+  QWANT,
+];
+
 const MARGINALIA: SourceInstance = {
   name: "Marginalia Search",
   host: "search.marginalia.nu",
@@ -643,6 +906,61 @@ function pickBest(candidates: Candidate[]): Candidate | null {
   return candidates.reduce((a, b) => (b.score > a.score ? b : a));
 }
 
+/** Token overlap between two answers — used to detect independent agreement. */
+function answerOverlap(a: string, b: string): number {
+  const wa = new Set((a.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []).slice(0, 40));
+  const wb = new Set((b.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []).slice(0, 40));
+  if (wa.size === 0 || wb.size === 0) return 0;
+  let n = 0;
+  for (const w of wa) if (wb.has(w)) n++;
+  return n / Math.min(wa.size, wb.size);
+}
+
+/**
+ * When two or more sources agree, merge their answers, keep every citation
+ * and bump confidence. Uses relevanceScore so a rambling extra source cannot
+ * drown a tight Wikipedia snippet.
+ */
+function synthesize(candidates: Candidate[], terms: string[]): Candidate | null {
+  const best = pickBest(candidates);
+  if (!best) return null;
+  const agreeing = candidates.filter((c) => c === best || answerOverlap(c.finding.answer, best.finding.answer) >= 0.28);
+  if (agreeing.length < 2) return best;
+  const sources: ResearchSourceHit[] = [];
+  const hosts: string[] = [];
+  const seenUrl = new Set<string>();
+  const seenHost = new Set<string>();
+  for (const c of agreeing.sort((a, b) => b.score - a.score)) {
+    for (const s of c.finding.sources) {
+      if (seenUrl.has(s.url)) continue;
+      seenUrl.add(s.url);
+      sources.push(s);
+    }
+    for (const h of c.finding.sourceHosts) {
+      if (seenHost.has(h)) continue;
+      seenHost.add(h);
+      hosts.push(h);
+    }
+  }
+  const extra = agreeing
+    .filter((c) => c !== best)
+    .map((c) => c.finding.answer.trim())
+    .filter((a) => a && a !== best.finding.answer.trim())
+    .slice(0, 2);
+  const mergedAnswer = extra.length
+    ? cap(`${best.finding.answer.trim()}${extra.map((e) => " " + e).join("")}`, 900)
+    : best.finding.answer;
+  const conf = Math.min(1, Math.max(best.score, relevanceScore({ title: sources[0]?.title, snippet: mergedAnswer }, terms)) + 0.12);
+  const finding: ResearchFinding = {
+    ...best.finding,
+    answer: mergedAnswer,
+    sources: sources.slice(0, 6),
+    sourceHosts: hosts,
+    confidence: Math.round(conf * 100) / 100,
+  };
+  return { finding, score: conf };
+}
+
 export class ResearchService {
   readonly enabled: boolean;
 
@@ -730,7 +1048,7 @@ export class ResearchService {
 
   /** Static order used by the status endpoint (no cursor side effects). */
   private staticSources(): SourceInstance[] {
-    return [DDG_INSTANT, WIKIPEDIA_SEARCH, DDG_HTML, DDG_LITE, BENGALI_WIKIPEDIA, ...SEARXNG_INSTANCES, WIKTIONARY, MOJEEK, WIKIPEDIA_SUMMARY, MARGINALIA];
+    return [DDG_INSTANT, WIKIPEDIA_SEARCH, DDG_HTML, DDG_LITE, BENGALI_WIKIPEDIA, ...SEARXNG_INSTANCES, WIKTIONARY, MOJEEK, WIKIPEDIA_SUMMARY, MARGINALIA, ...EXTRA_SOURCES];
   }
 
   /**
@@ -753,6 +1071,7 @@ export class ResearchService {
     } else {
       list.push(WIKTIONARY, MOJEEK, WIKIPEDIA_SUMMARY, MARGINALIA, BENGALI_WIKIPEDIA);
     }
+    list.push(...EXTRA_SOURCES);
     this.searxCursor = (this.searxCursor + 2) % SEARXNG_INSTANCES.length;
     return list;
   }
@@ -811,6 +1130,82 @@ export class ResearchService {
       inFlight: this.inflight.size,
       requestsLastMinute: this.requestTimes.filter((t) => t >= cutoff).length,
     };
+  }
+
+  /**
+   * Probe every source with a handful of known queries (English, বাংলা, Banglish).
+   * Used by GET /api/v1/research/selftest after deploy — each source is fetched
+   * once per applicable query so the circuit breaker still keys on hostname.
+   */
+  async selftest(): Promise<{
+    at: number;
+    queries: { topic: string; lang: string }[];
+    sources: {
+      name: string;
+      host: string;
+      pass: boolean;
+      skipped: boolean;
+      latencyMs: number;
+      error?: string;
+      sampleAnswer?: string;
+      confidence?: number;
+    }[];
+  }> {
+    const queries = [
+      { topic: "Alan Turing", lang: "en" },
+      { topic: "বাংলাদেশের রাজধানী", lang: "bn" },
+      { topic: "Dhaka weather today", lang: "en" },
+      { topic: "Bangladesher rajdhani ki", lang: "banglish" },
+    ];
+    const deadline = this.now() + Math.max(this.options.timeoutMs * 4, 20_000);
+    const rows: {
+      name: string;
+      host: string;
+      pass: boolean;
+      skipped: boolean;
+      latencyMs: number;
+      error?: string;
+      sampleAnswer?: string;
+      confidence?: number;
+    }[] = [];
+
+    for (const src of this.staticSources()) {
+      let applied: { topic: string; text: string } | null = null;
+      for (const q of queries) {
+        const rq = buildResearchQuery(q.topic);
+        const routed = queryOf(src, rq);
+        if (routed === null) continue;
+        applied = { topic: q.topic, text: src.host === "bn.wikipedia.org" ? routed : routed };
+        break;
+      }
+      if (!applied) {
+        rows.push({ name: src.name, host: src.host, pass: false, skipped: true, latencyMs: 0 });
+        continue;
+      }
+      const t0 = this.now();
+      const outcome = await this.fetchOnce(src, applied.text, deadline);
+      const latencyMs = this.now() - t0;
+      if (outcome.kind === "hit") {
+        const terms = scoringTerms(applied.topic);
+        const ranked = rankHits(outcome.hits, terms);
+        rows.push({
+          name: src.name,
+          host: src.host,
+          pass: true,
+          skipped: false,
+          latencyMs,
+          sampleAnswer: ranked?.answer?.slice(0, 220),
+          confidence: ranked ? Math.round(ranked.score * 100) / 100 : undefined,
+        });
+      } else if (outcome.kind === "clean") {
+        rows.push({ name: src.name, host: src.host, pass: false, skipped: false, latencyMs, error: "no results" });
+      } else if (outcome.kind === "http-fail") {
+        rows.push({ name: src.name, host: src.host, pass: false, skipped: false, latencyMs, error: `HTTP ${outcome.status}` });
+      } else {
+        rows.push({ name: src.name, host: src.host, pass: false, skipped: false, latencyMs, error: "network error" });
+      }
+    }
+    return { at: this.now(), queries, sources: rows };
   }
 
   /** Reset every circuit breaker (and optionally the caches). */
@@ -994,7 +1389,8 @@ export class ResearchService {
         state.candidates.push({ finding, score: ranked.score });
         if (ranked.score >= STRONG_SCORE && ranked.answer.length >= 25) {
           this.log(`research: ${src.name} answered with confidence ${ranked.score.toFixed(2)}`);
-          return finding;
+          const syn = synthesize(state.candidates, scoreTerms);
+          return syn?.finding ?? finding;
         }
         this.log(`research: ${src.name} hit was weak (${ranked.score.toFixed(2)}) — checking another source`);
         continue;
@@ -1021,6 +1417,8 @@ export class ResearchService {
         }
       }
     }
+    const syn = synthesize(state.candidates, scoreTerms);
+    if (syn && syn.score >= STRONG_SCORE && syn.finding.answer.length >= 25) return syn.finding;
     return null;
   }
 

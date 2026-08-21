@@ -833,6 +833,8 @@ export default function App() {
   const [memKey, setMemKey] = useState("");
   const [memValue, setMemValue] = useState("");
   const [brainMsg, setBrainMsg] = useState("");
+  const ingestRef = useRef<HTMLInputElement>(null);
+  const [ingestBusy, setIngestBusy] = useState(false);
 
   const refreshBrain = async () => {
     try {
@@ -848,6 +850,34 @@ export default function App() {
       if (nameRow?.value) setUserName(String(nameRow.value).split(" ")[0]);
     } catch {
       /* ignore */
+    }
+  };
+
+  const ingestFiles = async (list: FileList | File[]) => {
+    const files = Array.from(list).slice(0, 40);
+    if (files.length === 0) return;
+    setIngestBusy(true);
+    setBrainMsg(`Importing ${files.length} file(s)…`);
+    try {
+      const payload = [];
+      for (const f of files) {
+        const content = await f.text();
+        payload.push({ name: f.name, content });
+      }
+      const d = await api("/api/v1/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files: payload }),
+      });
+      setBrainMsg(
+        `Imported ${d.knowledgeInserted} knowledge chunks + ${d.pairsInserted} Q/A pairs. Background train started ✨`
+      );
+      refreshBrain();
+      loadSessions();
+    } catch (e: any) {
+      setBrainMsg("Error: " + e.message);
+    } finally {
+      setIngestBusy(false);
     }
   };
 
@@ -937,6 +967,8 @@ export default function App() {
   const [researchResult, setResearchResult] = useState<any>(null);
   const [researchBusy, setResearchBusy] = useState(false);
   const [researchMsg, setResearchMsg] = useState("");
+  const [selftest, setSelftest] = useState<any>(null);
+  const [selftestBusy, setSelftestBusy] = useState(false);
 
   const fetchResearchStatus = async () => {
     try {
@@ -964,6 +996,20 @@ export default function App() {
     }
     setResearchBusy(false);
     setResearchMsg("");
+    fetchResearchStatus();
+  };
+
+  const runSelftest = async () => {
+    if (selftestBusy) return;
+    setSelftestBusy(true);
+    setResearchMsg("Testing every source…");
+    try {
+      setSelftest(await api("/api/v1/research/selftest"));
+      setResearchMsg("");
+    } catch (e: any) {
+      setResearchMsg(e.message);
+    }
+    setSelftestBusy(false);
     fetchResearchStatus();
   };
 
@@ -1373,13 +1419,23 @@ export default function App() {
           icon={<Globe size={16} className="text-[#1a73e8]" />}
           className="md:col-span-2"
           right={
-            <button onClick={() => resetResearch(false)} className="px-3 py-1.5 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-lg text-xs font-medium transition-colors flex items-center gap-1">
-              <RefreshCw size={12} /> Reset Cooldowns
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button onClick={runSelftest} disabled={selftestBusy} className="px-3 py-1.5 bg-[#1a73e8] hover:bg-[#1765cc] disabled:opacity-50 text-white rounded-lg text-xs font-medium transition-colors flex items-center gap-1">
+                {selftestBusy ? "…" : (<><CheckCircle2 size={12} /> Test all sources</>)}
+              </button>
+              <button onClick={() => resetResearch(false)} className="px-3 py-1.5 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-lg text-xs font-medium transition-colors flex items-center gap-1">
+                <RefreshCw size={12} /> Reset Cooldowns
+              </button>
+            </div>
           }
         >
           <div className="space-y-1.5 max-h-[380px] overflow-y-auto pr-1">
             {sources.length === 0 && <div className="text-[13px] text-[#5f6368] p-4 text-center">Loading source status…</div>}
+            {selftest?.sources && (
+              <div className="mb-2 p-2.5 bg-[#f8f9fa] border border-[#e3e3e3] rounded-xl text-[11px] text-[#5f6368]">
+                Self-test: {selftest.sources.filter((x: any) => x.pass).length} pass · {selftest.sources.filter((x: any) => !x.pass && !x.skipped).length} fail · {selftest.sources.filter((x: any) => x.skipped).length} skipped
+              </div>
+            )}
             {sources.map((s: any) => (
               <div key={`${s.name}-${s.host}`} className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl hover:bg-[#f8f9fa]">
                 <div className="min-w-0">
@@ -1565,6 +1621,27 @@ export default function App() {
               </a>
             </div>
             {brainMsg && <div className="mt-3 text-xs text-[#1f1f1f] p-2.5 bg-[#f8f9fa] rounded-lg">{brainMsg}</div>}
+            <input
+              ref={ingestRef}
+              type="file"
+              multiple
+              accept=".txt,.md,.jsonl,.ndjson,.json,.csv,text/plain"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.length) void ingestFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
+            <button
+              onClick={() => ingestRef.current?.click()}
+              disabled={ingestBusy}
+              className="mt-2 w-full py-2.5 bg-[#f3e8fd] hover:bg-[#e9d5fb] disabled:opacity-50 text-[#7627bb] rounded-xl text-[13px] font-medium transition-colors flex items-center justify-center gap-1.5"
+            >
+              <Upload size={14} /> {ingestBusy ? "Importing…" : "Import .txt / .jsonl corpus (auto-train)"}
+            </button>
+            <p className="mt-2 text-[11px] text-[#5f6368] leading-snug">
+              Other-AI dumps, Bangla/English language files, or User:/AI: transcripts. Saved as knowledge; the small brain retrains in the background.
+            </p>
           </Card>
 
           <Card title="Knowledge 📚" icon={<BookMarked size={16} className="text-[#188038]" />}>

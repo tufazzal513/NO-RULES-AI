@@ -35,6 +35,24 @@ test("language detection separates English, Bangla and Banglish", () => {
   assert.equal(detectLanguage("tumi kemon acho"), "banglish");
   assert.equal(detectLanguage("My name is Tufazzal"), "en");
   assert.equal(detectLanguage("12 * 8 + 4"), "en");
+  // Ordinary English must never be classified as Banglish (regression).
+  assert.equal(detectLanguage("please tell me about Alan Turing"), "en");
+  assert.equal(detectLanguage("can you help me with this question"), "en");
+  assert.equal(detectLanguage("the weather in London is bad today"), "en");
+  assert.equal(detectLanguage("I will go to school after lunch"), "en");
+  assert.equal(detectLanguage("this is a test of the English language"), "en");
+});
+
+test("Banglish dictionary covers conjugations, family, food and numbers", () => {
+  assert.equal(banglishToBengali("ami khabo"), "আমি খাব");
+  assert.equal(banglishToBengali("ammu baba bhai bon"), "মা বাবা ভাই বোন");
+  assert.equal(banglishToBengali("bhat dal ilish"), "ভাত ডাল ইলিশ");
+  assert.equal(banglishToBengali("ek dui tin char pach"), "এক দুই তিন চার পাঁচ");
+  assert.equal(banglishToBengali("chottogram sylhet khulna"), "চট্টগ্রাম সিলেট খুলনা");
+  // spelling variants
+  assert.equal(banglishToBengali("valo"), "ভালো");
+  assert.equal(banglishToBengali("shuru"), "শুরু");
+  assert.equal(banglishToBengali("kibhabe"), "কীভাবে");
 });
 
 test("all three scripts normalise onto ONE canonical form", () => {
