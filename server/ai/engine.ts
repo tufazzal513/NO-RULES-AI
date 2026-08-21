@@ -264,7 +264,8 @@ export class AIEngine {
           mode: "fallback",
         };
       }
-      const res = await this.research.research(forced);
+      // `force` bypasses the negative cache — the user explicitly asked for a fresh lookup.
+      const res = await this.research.research(forced, { force: true });
       if (res.ok && res.finding) return { reply: formatFinding(res.finding), mode: "research" };
       return { reply: this.researchFailReply(res, forced), mode: "research" };
     }

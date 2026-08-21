@@ -1,23 +1,35 @@
 /**
- * Online research — 7 free, keyless sources. No API key, no signup.
+ * Online research — free, keyless sources. No API key, no signup.
  * -----------------------------------------------------------------
  * Sources (each on its OWN hostname, so a rate limit on one never
  * affects the others):
  *
- *   1. Wikipedia Search API      en.wikipedia.org
- *   2. DuckDuckGo Instant Answer api.duckduckgo.com
- *   3. DuckDuckGo HTML           html.duckduckgo.com
- *   4. DuckDuckGo Lite           lite.duckduckgo.com
- *   5. SearXNG (5 public instances, rotated)
- *   6. Mojeek                    www.mojeek.com
- *   7. Wikipedia REST summary    en.wikipedia.org/api/rest_v1
+ *   1. DuckDuckGo Instant Answer   api.duckduckgo.com
+ *   2. Wikipedia Search            en.wikipedia.org
+ *   3. DuckDuckGo HTML             html.duckduckgo.com
+ *   4. DuckDuckGo Lite             lite.duckduckgo.com
+ *   5. Bengali Wikipedia Search    bn.wikipedia.org   ← বাংলা প্রশ্নের জন্য
+ *   6. SearXNG (8 public instances, 2 rotated per call)
+ *   7. Wiktionary REST             en.wiktionary.org
+ *   8. Mojeek                      www.mojeek.com
+ *   9. Wikipedia REST summary      en.wikipedia.org
+ *  10. Marginalia Search           search.marginalia.nu
  *
- * Rate-limit protection:
+ * Rate-limit protection (so automatic lookups can never get "blocked"):
  *   • per-host circuit breaker with exponential backoff (1 → 15 min),
  *     honouring Retry-After headers (see circuit.ts)
+ *   • a hard cap on network attempts per call (default 8) — we never
+ *     hammer every source for one question
+ *   • a global cap on requests per rolling minute (default 60)
  *   • 6 rotating browser User-Agents
  *   • polite spacing between requests
  *   • permanent cache (SQLite → Telegram snapshot) + stale-cache fallback
+ *   • negative cache — a topic that cleanly returned "no answer" is not
+ *     re-searched for a while, so repeat questions don't burn requests
+ *   • fast offline detection — 2 consecutive fetch-level errors with no
+ *     HTTP response at all stop the whole call early (stale cache wins)
+ *   • one retry per source when the internet is known to be up (transient
+ *     network blips recover without opening a circuit)
  *   • in-flight request de-duplication
  *   • a hard time budget so a chat reply can never hang for long
  *
@@ -56,6 +68,10 @@ export interface ResearchResult {
   finding?: ResearchFinding;
   /** Every source failed at the network level (likely: no internet). */
   offline?: boolean;
+  /** The global per-minute request cap was reached — we chose not to hammer sources. */
+  rateLimited?: boolean;
+  /** This topic was recently searched cleanly and had no answer (negative cache). */
+  negative?: boolean;
   /** Sources that were attempted during this call. */
   triedSources?: string[];
   error?: string;
@@ -78,6 +94,14 @@ export interface ResearchOptions {
   now?: () => number;
   /** Minimum gap between two network requests (polite spacing). */
   spacingMs?: number;
+  /** Hard cap on network requests per research call (default 8). */
+  maxAttempts?: number;
+  /** Global cap on requests per rolling minute (default 60). */
+  maxRequestsPerMinute?: number;
+  /** How long a cleanly-failed topic is remembered before re-searching (minutes, default 10). */
+  negativeTtlMinutes?: number;
+  /** Consecutive fetch-level errors with no HTTP response that prove "offline" (default 2). */
+  offlineFailFastAfter?: number;
 }
 
 export interface ResearchStatus {
@@ -85,6 +109,8 @@ export interface ResearchStatus {
   cacheTtlMinutes: number;
   timeoutMs: number;
   saveToKnowledge: boolean;
+  maxAttempts: number;
+  maxRequestsPerMinute: number;
   sources: {
     name: string;
     host: string;
@@ -93,9 +119,16 @@ export interface ResearchStatus {
     cooldownRemainingMs: number;
     lastRetryAfterMs: number | null;
   }[];
-  cache: { entries: number; hits: number; misses: number; staleServed: number };
+  cache: {
+    entries: number;
+    hits: number;
+    misses: number;
+    staleServed: number;
+    negativeEntries: number;
+  };
   savedFindings: number;
   inFlight: number;
+  requestsLastMinute: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,7 +214,7 @@ function isAbortError(e: unknown): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// The 7 keyless sources
+// The keyless sources
 // ---------------------------------------------------------------------------
 
 interface ParsedHits {
@@ -198,30 +231,38 @@ interface SourceInstance {
 
 const cap = (s: string, n: number) => (s.length > n ? s.slice(0, n).trimEnd() + "…" : s);
 
-const WIKIPEDIA_SEARCH: SourceInstance = {
-  name: "Wikipedia Search",
-  host: "en.wikipedia.org",
-  buildUrl: (t) =>
-    `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(t)}&format=json&srlimit=3&origin=*`,
-  parse(body) {
-    let j: any;
-    try {
-      j = JSON.parse(body);
-    } catch {
-      return null;
-    }
-    const hits = ((j?.query?.search ?? []) as any[])
-      .filter((r) => r?.title)
-      .slice(0, 3)
-      .map((r) => ({
-        title: r.title,
-        url: `https://en.wikipedia.org/wiki/${encodeURIComponent(String(r.title).replace(/ /g, "_"))}`,
-        snippet: decodeEntities(stripTags(r.snippet ?? "")),
-      }));
-    if (hits.length === 0) return { answer: "", results: [] };
-    return { answer: cap(hits[0].snippet, 500), results: hits };
-  },
-};
+/** An empty body is a clean "no results" response, not a block. */
+const emptyResults = (): ParsedHits => ({ answer: "", results: [] });
+
+function makeWikiSource(name: string, host: string, basePath: string): SourceInstance {
+  return {
+    name,
+    host,
+    buildUrl: (t) =>
+      `https://${host}/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(t)}&format=json&srlimit=3&origin=*`,
+    parse(body) {
+      let j: any;
+      try {
+        j = JSON.parse(body);
+      } catch {
+        return null;
+      }
+      const hits = ((j?.query?.search ?? []) as any[])
+        .filter((r) => r?.title)
+        .slice(0, 3)
+        .map((r) => ({
+          title: r.title,
+          url: `https://${host}${basePath}${encodeURIComponent(String(r.title).replace(/ /g, "_"))}`,
+          snippet: decodeEntities(stripTags(r.snippet ?? "")),
+        }));
+      if (hits.length === 0) return emptyResults();
+      return { answer: cap(hits[0].snippet, 500), results: hits };
+    },
+  };
+}
+
+const WIKIPEDIA_SEARCH: SourceInstance = makeWikiSource("Wikipedia Search", "en.wikipedia.org", "/wiki/");
+const BENGALI_WIKIPEDIA: SourceInstance = makeWikiSource("বাংলা উইকিপিডিয়া", "bn.wikipedia.org", "/wiki/");
 
 const DDG_INSTANT: SourceInstance = {
   name: "DuckDuckGo Instant Answer",
@@ -229,6 +270,7 @@ const DDG_INSTANT: SourceInstance = {
   buildUrl: (t) =>
     `https://api.duckduckgo.com/?q=${encodeURIComponent(t)}&format=json&no_html=1&skip_disambig=1`,
   parse(body) {
+    if (!body.trim()) return emptyResults();
     let j: any;
     try {
       j = JSON.parse(body);
@@ -244,56 +286,50 @@ const DDG_INSTANT: SourceInstance = {
         results.push({ title: decodeEntities(stripTags(r.Text)).split(" - ")[0], url: r.FirstURL, snippet: decodeEntities(stripTags(r.Text)) });
       }
     }
-    if (results.length === 0) return { answer: "", results: [] };
+    if (results.length === 0) return emptyResults();
     return { answer: cap(results[0].snippet, 500), results };
   },
 };
 
-const DDG_HTML: SourceInstance = {
-  name: "DuckDuckGo HTML",
-  host: "html.duckduckgo.com",
-  buildUrl: (t) => `https://html.duckduckgo.com/html/?q=${encodeURIComponent(t)}`,
-  parse(body) {
-    const results: ResearchSourceHit[] = [];
-    const linkRe = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-    const snippetRe = /<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
-    const snippets = [...body.matchAll(snippetRe)].map((m) => decodeEntities(stripTags(m[1])));
-    let i = 0;
-    for (const m of body.matchAll(linkRe)) {
-      if (results.length >= 3) break;
-      const url = decodeEntities(m[1]);
-      if (!/^https?:/i.test(url)) continue;
-      results.push({ title: decodeEntities(stripTags(m[2])) || url, url, snippet: snippets[i] ?? "" });
-      i++;
-    }
-    if (results.length === 0) return null;
-    return { answer: cap(results[0].snippet || results[0].title, 500), results };
-  },
-};
+function makeDdgHtmlSource(name: string, host: string, urlFor: (t: string) => string): SourceInstance {
+  return {
+    name,
+    host,
+    buildUrl: urlFor,
+    parse(body) {
+      if (!body.trim()) return emptyResults();
+      const results: ResearchSourceHit[] = [];
+      const linkRe = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+      const snippetRe = /<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
+      const snippets = [...body.matchAll(snippetRe)].map((m) => decodeEntities(stripTags(m[1])));
+      let i = 0;
+      for (const m of body.matchAll(linkRe)) {
+        if (results.length >= 3) break;
+        const url = decodeEntities(m[1]);
+        if (!/^https?:/i.test(url)) continue;
+        results.push({ title: decodeEntities(stripTags(m[2])) || url, url, snippet: snippets[i] ?? "" });
+        i++;
+      }
+      if (results.length === 0) return emptyResults();
+      return { answer: cap(results[0].snippet || results[0].title, 500), results };
+    },
+  };
+}
 
-const DDG_LITE: SourceInstance = {
-  name: "DuckDuckGo Lite",
-  host: "lite.duckduckgo.com",
-  buildUrl: (t) => `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(t)}`,
-  parse(body) {
-    const results: ResearchSourceHit[] = [];
-    const linkRe = /<a[^>]*class="[^"]*result-link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-    const snippetRe = /<td[^>]*class="[^"]*result-snippet[^"]*"[^>]*>([\s\S]*?)<\/td>/gi;
-    const snippets = [...body.matchAll(snippetRe)].map((m) => decodeEntities(stripTags(m[1])));
-    let i = 0;
-    for (const m of body.matchAll(linkRe)) {
-      if (results.length >= 3) break;
-      const url = decodeEntities(m[1]);
-      if (!/^https?:/i.test(url)) continue;
-      results.push({ title: decodeEntities(stripTags(m[2])) || url, url, snippet: snippets[i] ?? "" });
-      i++;
-    }
-    if (results.length === 0) return null;
-    return { answer: cap(results[0].snippet || results[0].title, 500), results };
-  },
-};
+const DDG_HTML: SourceInstance = makeDdgHtmlSource(
+  "DuckDuckGo HTML",
+  "html.duckduckgo.com",
+  (t) => `https://html.duckduckgo.com/html/?q=${encodeURIComponent(t)}`
+);
+
+const DDG_LITE: SourceInstance = makeDdgHtmlSource(
+  "DuckDuckGo Lite",
+  "lite.duckduckgo.com",
+  (t) => `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(t)}`
+);
 
 function parseSearx(body: string, baseUrl: string): ParsedHits | null {
+  if (!body.trim()) return emptyResults();
   try {
     const j = JSON.parse(body);
     const hits = ((j?.results ?? []) as any[])
@@ -305,6 +341,7 @@ function parseSearx(body: string, baseUrl: string): ParsedHits | null {
         snippet: decodeEntities(stripTags(r.content ?? "")),
       }));
     if (hits.length > 0) return { answer: cap(hits[0].snippet, 500), results: hits };
+    return emptyResults();
   } catch {
     /* not JSON — fall back to HTML link extraction below */
   }
@@ -324,7 +361,7 @@ function parseSearx(body: string, baseUrl: string): ParsedHits | null {
     if (/\/search|\/about|\/preferences|\/stats/i.test(url)) continue;
     results.push({ title, url, snippet: "" });
   }
-  if (results.length === 0) return null;
+  if (results.length === 0) return emptyResults();
   return { answer: cap(results[0].title, 500), results };
 }
 
@@ -334,6 +371,9 @@ const SEARXNG_HOSTS = [
   "searx.tiekoetter.com",
   "search.inetol.net",
   "baresearch.org",
+  "priv.au",
+  "opnxng.com",
+  "search.hbubli.cc",
 ] as const;
 
 const SEARXNG_INSTANCES: SourceInstance[] = SEARXNG_HOSTS.map((host, i) => ({
@@ -348,6 +388,7 @@ const MOJEEK: SourceInstance = {
   host: "www.mojeek.com",
   buildUrl: (t) => `https://www.mojeek.com/search?q=${encodeURIComponent(t)}`,
   parse(body) {
+    if (!body.trim()) return emptyResults();
     const results: ResearchSourceHit[] = [];
     const linkRe = /<a[^>]*class="[^"]*\bob\b[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
     const snippetRe = /<p[^>]*class="[^"]*\bs\b[^"]*"[^>]*>([\s\S]*?)<\/p>/gi;
@@ -360,7 +401,7 @@ const MOJEEK: SourceInstance = {
       results.push({ title: decodeEntities(stripTags(m[2])) || url, url, snippet: snippets[i] ?? "" });
       i++;
     }
-    if (results.length === 0) return null;
+    if (results.length === 0) return emptyResults();
     return { answer: cap(results[0].snippet || results[0].title, 500), results };
   },
 };
@@ -370,6 +411,7 @@ const WIKIPEDIA_SUMMARY: SourceInstance = {
   host: "en.wikipedia.org",
   buildUrl: (t) => `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(t)}`,
   parse(body) {
+    if (!body.trim()) return emptyResults();
     let j: any;
     try {
       j = JSON.parse(body);
@@ -382,6 +424,65 @@ const WIKIPEDIA_SUMMARY: SourceInstance = {
       answer: cap(String(j.extract ?? j.title), 600),
       results: [{ title: j.title, url, snippet: String(j.extract ?? "") }],
     };
+  },
+};
+
+const WIKTIONARY: SourceInstance = {
+  name: "Wiktionary definition",
+  host: "en.wiktionary.org",
+  buildUrl: (t) =>
+    `https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(t.split(/\s+/)[0].toLowerCase())}`,
+  parse(body) {
+    if (!body.trim()) return emptyResults();
+    let j: any;
+    try {
+      j = JSON.parse(body);
+    } catch {
+      return null;
+    }
+    const sections = Object.values(j ?? {}) as any[];
+    const defs: string[] = [];
+    for (const s of sections) {
+      for (const d of s ?? []) {
+        for (const def of d?.definitions ?? []) {
+          if (def?.definition) defs.push(decodeEntities(stripTags(String(def.definition))));
+        }
+      }
+    }
+    if (defs.length === 0) return emptyResults();
+    const word = decodeURIComponent(this.buildUrl("").split("/").pop() ?? "");
+    const title = (sections[0]?.[0]?.partOfSpeech ? `${word} (${sections[0][0].partOfSpeech})` : word) || "Wiktionary";
+    return {
+      answer: cap(defs.slice(0, 3).join(" "), 600),
+      results: [{ title, url: `https://en.wiktionary.org/wiki/${encodeURIComponent(word)}`, snippet: cap(defs[0], 400) }],
+    };
+  },
+};
+
+const MARGINALIA: SourceInstance = {
+  name: "Marginalia Search",
+  host: "search.marginalia.nu",
+  buildUrl: (t) => `https://search.marginalia.nu/search?query=${encodeURIComponent(t)}`,
+  parse(body, url) {
+    if (!body.trim()) return emptyResults();
+    const results: ResearchSourceHit[] = [];
+    const linkRe = /<a[^>]+href="([^"]+)"[^>]*>([\s\S]{6,160}?)<\/a>/gi;
+    for (const m of body.matchAll(linkRe)) {
+      if (results.length >= 3) break;
+      const title = decodeEntities(stripTags(m[2]));
+      if (title.length < 8) continue;
+      let href = decodeEntities(m[1]);
+      try {
+        href = new URL(href, url).toString();
+      } catch {
+        continue;
+      }
+      if (!/^https?:/i.test(href)) continue;
+      if (href.includes("marginalia.nu") || /\/about|\/search/i.test(href)) continue;
+      results.push({ title, url: href, snippet: "" });
+    }
+    if (results.length === 0) return emptyResults();
+    return { answer: cap(results[0].title, 500), results };
   },
 };
 
@@ -399,11 +500,23 @@ const USER_AGENTS = [
 // ResearchService
 // ---------------------------------------------------------------------------
 
+/** Outcome of ONE fetch attempt against ONE source. */
+type TryOutcome =
+  | { kind: "hit"; finding: ResearchFinding }
+  | { kind: "clean" } // healthy response, no answer for this topic
+  | { kind: "http-fail"; status: number; retryAfterMs: number | null } // 429/5xx/blocked page
+  | { kind: "error" }; // fetch threw / aborted — network-level problem
+
 export class ResearchService {
   readonly enabled: boolean;
 
   private db: any;
-  private options: Required<Pick<ResearchOptions, "cacheTtlMinutes" | "timeoutMs" | "saveToKnowledge" | "spacingMs">> &
+  private options: Required<
+    Pick<
+      ResearchOptions,
+      "cacheTtlMinutes" | "timeoutMs" | "saveToKnowledge" | "spacingMs" | "maxAttempts" | "maxRequestsPerMinute" | "negativeTtlMinutes" | "offlineFailFastAfter"
+    >
+  > &
     Pick<ResearchOptions, "fetchImpl" | "logger" | "now">;
   private hooks: ResearchHooks;
   private breaker = new CircuitBreaker();
@@ -411,6 +524,8 @@ export class ResearchService {
   private searxCursor = 0;
   private uaIndex = 0;
   private lastRequestAt = 0;
+  private requestTimes: number[] = [];
+  private attemptsThisCall = 0;
   private hits = 0;
   private misses = 0;
   private staleServed = 0;
@@ -423,6 +538,10 @@ export class ResearchService {
       timeoutMs: options.timeoutMs,
       saveToKnowledge: options.saveToKnowledge !== false,
       spacingMs: options.spacingMs ?? 250,
+      maxAttempts: options.maxAttempts ?? 8,
+      maxRequestsPerMinute: options.maxRequestsPerMinute ?? 60,
+      negativeTtlMinutes: options.negativeTtlMinutes ?? 10,
+      offlineFailFastAfter: options.offlineFailFastAfter ?? 2,
       fetchImpl: options.fetchImpl,
       logger: options.logger,
       now: options.now,
@@ -459,19 +578,36 @@ export class ResearchService {
     return ua;
   }
 
-  /** Static order used by the status endpoint (no cursor side effects). */
-  private staticSources(): SourceInstance[] {
-    return [DDG_INSTANT, WIKIPEDIA_SEARCH, DDG_HTML, DDG_LITE, ...SEARXNG_INSTANCES, MOJEEK, WIKIPEDIA_SUMMARY];
+  // -- global request-rate cap ------------------------------------------------
+
+  /** Am I allowed to send another request within the rolling minute? */
+  private underRateCap(): boolean {
+    const cutoff = this.now() - 60_000;
+    this.requestTimes = this.requestTimes.filter((t) => t >= cutoff);
+    return this.requestTimes.length < this.options.maxRequestsPerMinute;
   }
 
-  /** Search order with the SearXNG instances rotated per call. */
+  private recordRequest(): void {
+    this.requestTimes.push(this.now());
+    this.attemptsThisCall++;
+  }
+
+  /** Static order used by the status endpoint (no cursor side effects). */
+  private staticSources(): SourceInstance[] {
+    return [DDG_INSTANT, WIKIPEDIA_SEARCH, DDG_HTML, DDG_LITE, BENGALI_WIKIPEDIA, ...SEARXNG_INSTANCES, WIKTIONARY, MOJEEK, WIKIPEDIA_SUMMARY, MARGINALIA];
+  }
+
+  /**
+   * Search order per call: the 4 fastest engines, Bengali Wikipedia (great for
+   * বাংলা প্রশ্ন), then 2 rotated SearXNG instances, then the reserve pool.
+   * Rotating SearXNG spreads load across all public instances.
+   */
   private rotatedSources(): SourceInstance[] {
-    const list: SourceInstance[] = [DDG_INSTANT, WIKIPEDIA_SEARCH, DDG_HTML, DDG_LITE];
-    for (let i = 0; i < SEARXNG_INSTANCES.length; i++) {
-      list.push(SEARXNG_INSTANCES[(this.searxCursor + i) % SEARXNG_INSTANCES.length]);
-    }
-    list.push(MOJEEK, WIKIPEDIA_SUMMARY);
-    this.searxCursor = (this.searxCursor + 1) % SEARXNG_INSTANCES.length;
+    const list: SourceInstance[] = [DDG_INSTANT, WIKIPEDIA_SEARCH, DDG_HTML, DDG_LITE, BENGALI_WIKIPEDIA];
+    list.push(SEARXNG_INSTANCES[this.searxCursor % SEARXNG_INSTANCES.length]);
+    list.push(SEARXNG_INSTANCES[(this.searxCursor + 1) % SEARXNG_INSTANCES.length]);
+    list.push(WIKTIONARY, MOJEEK, WIKIPEDIA_SUMMARY, MARGINALIA);
+    this.searxCursor = (this.searxCursor + 2) % SEARXNG_INSTANCES.length;
     return list;
   }
 
@@ -481,13 +617,16 @@ export class ResearchService {
    * Research a topic. Fresh cache answers instantly; otherwise the sources are
    * tried in order inside one hard time budget. Concurrent calls for the same
    * topic share ONE in-flight request.
+   *
+   * `force` (the `/research <topic>` command) bypasses the negative cache —
+   * "I already know there was no answer recently" — and does a real lookup.
    */
-  async research(topic: string): Promise<ResearchResult> {
+  async research(topic: string, opts: { force?: boolean } = {}): Promise<ResearchResult> {
     if (!this.enabled) return { ok: false, error: "Online research is disabled." };
     const key = this.cacheKey(topic);
     const existing = this.inflight.get(key);
     if (existing) return existing;
-    const p = this.doResearch(topic, key);
+    const p = this.doResearch(topic, key, opts.force === true);
     this.inflight.set(key, p);
     try {
       return await p;
@@ -499,36 +638,49 @@ export class ResearchService {
   /** Current state for GET /api/v1/research/status. */
   status(): ResearchStatus {
     const cacheEntries = Number((this.db.prepare("SELECT COUNT(*) AS c FROM research_cache").get() as any).c) || 0;
+    const negEntries = Number((this.db.prepare("SELECT COUNT(*) AS c FROM research_negcache").get() as any).c) || 0;
     const savedFindings =
       Number((this.db.prepare("SELECT COUNT(*) AS c FROM knowledge WHERE title LIKE 'Research:%'").get() as any).c) || 0;
+    const cutoff = this.now() - 60_000;
     return {
       enabled: this.enabled,
       cacheTtlMinutes: this.options.cacheTtlMinutes,
       timeoutMs: this.options.timeoutMs,
       saveToKnowledge: this.options.saveToKnowledge,
+      maxAttempts: this.options.maxAttempts,
+      maxRequestsPerMinute: this.options.maxRequestsPerMinute,
       sources: this.staticSources().map((s) => ({
         name: s.name,
         host: s.host,
         ...this.breaker.state(s.host),
       })),
-      cache: { entries: cacheEntries, hits: this.hits, misses: this.misses, staleServed: this.staleServed },
+      cache: {
+        entries: cacheEntries,
+        hits: this.hits,
+        misses: this.misses,
+        staleServed: this.staleServed,
+        negativeEntries: negEntries,
+      },
       savedFindings,
       inFlight: this.inflight.size,
+      requestsLastMinute: this.requestTimes.filter((t) => t >= cutoff).length,
     };
   }
 
-  /** Reset every circuit breaker (and optionally the cache). */
+  /** Reset every circuit breaker (and optionally the caches). */
   reset(clearCache = false): { ok: boolean; clearedCache: boolean } {
     this.breaker.resetAll();
+    this.requestTimes = [];
     if (clearCache) {
       this.db.prepare("DELETE FROM research_cache").run();
+      this.db.prepare("DELETE FROM research_negcache").run();
     }
     return { ok: true, clearedCache: clearCache };
   }
 
   // -- internals --------------------------------------------------------------
 
-  private async doResearch(topic: string, key: string): Promise<ResearchResult> {
+  private async doResearch(topic: string, key: string, force = false): Promise<ResearchResult> {
     const ttlMs = this.options.cacheTtlMinutes * 60_000;
 
     // 1) Fresh permanent cache → instant answer, zero network.
@@ -544,36 +696,86 @@ export class ResearchService {
       }
     }
 
-    // 2) Live lookup inside the hard time budget.
+    // 2) Negative cache — this topic recently returned a clean "no answer".
+    //    Re-searching it would only burn requests on the public sources.
+    //    A forced lookup (/research <topic>) skips this guard.
+    const neg = this.db.prepare("SELECT created_at FROM research_negcache WHERE key = ?").get(key) as any;
+    if (neg && !force) {
+      const age = this.now() - this.dbTime(neg.created_at);
+      if (age <= this.options.negativeTtlMinutes * 60_000) {
+        this.log(`research: "${topic}" has no known answer (negative cache) — skipping sources`);
+        return { ok: false, offline: false, negative: true, triedSources: [] };
+      }
+    }
+
+    // 3) Global rate cap — never hammer the public sources.
+    if (!this.underRateCap()) {
+      this.log(`research: global request cap reached (${this.options.maxRequestsPerMinute}/min) — cooling down`);
+      if (row) {
+        this.staleServed++;
+        const finding: ResearchFinding = JSON.parse(row.result);
+        return { ok: true, finding: { ...finding, cached: true, stale: true } };
+      }
+      return { ok: false, offline: false, rateLimited: true, triedSources: [] };
+    }
+
+    // 4) Live lookup inside the hard time budget.
     const deadline = this.now() + this.options.timeoutMs;
     const tried: string[] = [];
     let sawNetworkError = false;
-    let attempted = 0;
+    let consecutiveNetworkErrors = 0;
+    let sawHttp = false;
     let skippedOpenCircuits = 0;
+    this.attemptsThisCall = 0;
+    let bestWeak: ResearchFinding | null = null;
 
     for (const src of this.rotatedSources()) {
       if (this.now() >= deadline) break;
+      if (this.attemptsThisCall >= this.options.maxAttempts) break;
+      if (!this.underRateCap()) break;
       tried.push(src.name);
       if (this.breaker.isOpen(src.host)) {
         skippedOpenCircuits++;
         continue;
       }
-      attempted++;
-      try {
-        const finding = await this.trySource(src, topic, deadline);
-        if (finding) {
-          this.save(key, topic, finding, src.name);
-          return { ok: true, finding };
+      const outcome = await this.trySource(src, topic, deadline, { allowRetry: sawHttp });
+      if (outcome.kind === "hit") {
+        // A very short answer is weak — keep it as a fallback and look for better.
+        if (outcome.finding.answer.length < 30) {
+          if (!bestWeak) bestWeak = outcome.finding;
+          continue;
         }
-      } catch (e) {
-        // fetch-level error (DNS/refused/timeout) — likely offline, never fatal.
+        this.save(key, topic, outcome.finding, src.name);
+        return { ok: true, finding: outcome.finding };
+      }
+      if (outcome.kind === "clean") {
+        sawHttp = true;
+        consecutiveNetworkErrors = 0;
+      } else if (outcome.kind === "http-fail") {
+        sawHttp = true;
+        consecutiveNetworkErrors = 0;
+        this.breaker.recordFailure(src.host, outcome.retryAfterMs);
+        this.log(`research: ${src.name} answered HTTP ${outcome.status} — circuit opened`);
+      } else {
         sawNetworkError = true;
+        consecutiveNetworkErrors++;
         this.breaker.recordFailure(src.host);
-        this.log(`research: ${src.name} network error: ${(e as Error).message}`);
+        if (!sawHttp && consecutiveNetworkErrors >= this.options.offlineFailFastAfter) {
+          this.log(
+            `research: ${consecutiveNetworkErrors} consecutive network errors with no HTTP response — internet appears unreachable, stopping early`
+          );
+          break;
+        }
       }
     }
 
-    // 3) Internet unreachable? Serve the stale cache instead of nothing.
+    // A weak answer is still better than nothing — but never while offline.
+    if (bestWeak && sawHttp) {
+      this.save(key, topic, bestWeak, "best-effort");
+      return { ok: true, finding: bestWeak };
+    }
+
+    // 5) Internet unreachable? Serve the stale cache instead of nothing.
     if (row) {
       this.staleServed++;
       const finding: ResearchFinding = JSON.parse(row.result);
@@ -582,29 +784,58 @@ export class ResearchService {
 
     // Every host either failed at the network level or was already cooling
     // down from earlier failures — treat that as "no internet right now".
-    const offline = sawNetworkError || (attempted === 0 && skippedOpenCircuits > 0);
+    const offline = sawNetworkError || (this.attemptsThisCall === 0 && skippedOpenCircuits > 0);
+
+    // 6) The internet worked but no source knew the answer — remember that for
+    //    a while so repeated questions don't hammer the sources again.
+    if (!offline && this.attemptsThisCall > 0) {
+      this.db
+        .prepare("INSERT INTO research_negcache (key, topic) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET topic = excluded.topic, created_at = CURRENT_TIMESTAMP")
+        .run(key, topic);
+    }
+
     return { ok: false, offline, triedSources: tried };
   }
 
-  private async trySource(src: SourceInstance, topic: string, deadline: number): Promise<ResearchFinding | null> {
+  /** Try one source, with ONE retry for transient network errors when the internet is known to be up. */
+  private async trySource(
+    src: SourceInstance,
+    topic: string,
+    deadline: number,
+    ctx: { allowRetry: boolean }
+  ): Promise<TryOutcome> {
     const check = this.breaker.check(src.host);
     if (!check.allowed) {
       this.log(`research: ${src.name} in cooldown (${Math.round(check.retryInMs / 1000)}s left)`);
-      return null;
+      return { kind: "clean" };
     }
     const remaining = deadline - this.now();
-    if (remaining <= 0) return null;
+    if (remaining <= 0) return { kind: "clean" };
 
     // Polite spacing between consecutive requests to different hosts.
     if (this.lastRequestAt > 0) {
       const since = this.now() - this.lastRequestAt;
       if (since < this.options.spacingMs) {
         await sleep(Math.min(this.options.spacingMs - since, remaining));
-        if (this.now() >= deadline) return null;
+        if (this.now() >= deadline) return { kind: "clean" };
       }
     }
-    this.lastRequestAt = this.now();
 
+    let outcome = await this.fetchOnce(src, topic, deadline);
+    if (outcome.kind === "error" && ctx.allowRetry && this.underRateCap()) {
+      const left = deadline - this.now();
+      if (left > 400) {
+        await sleep(Math.min(150, left));
+        if (this.now() < deadline && this.attemptsThisCall < this.options.maxAttempts) {
+          outcome = await this.fetchOnce(src, topic, deadline);
+        }
+      }
+    }
+    return outcome;
+  }
+
+  /** One fetch + parse round against one source. */
+  private async fetchOnce(src: SourceInstance, topic: string, deadline: number): Promise<TryOutcome> {
     const controller = new AbortController();
     // One slow host must never eat the whole budget — give it at most half of
     // what is left, so later sources still get their chance inside the deadline.
@@ -612,6 +843,8 @@ export class ResearchService {
     const perSourceTimeout = Math.min(2500, Math.max(300, Math.floor(remainingNow / 2)));
     const timer = setTimeout(() => controller.abort(), perSourceTimeout);
     try {
+      this.lastRequestAt = this.now();
+      this.recordRequest();
       const url = src.buildUrl(topic);
       const res = await this.fetchImpl(url, {
         method: "GET",
@@ -625,13 +858,10 @@ export class ResearchService {
 
       if (res.status === 429 || res.status >= 500) {
         const retryAfter = parseRetryAfterMs(res.headers?.get?.("retry-after"));
-        this.breaker.recordFailure(src.host, retryAfter);
-        this.log(`research: ${src.name} answered HTTP ${res.status} — circuit opened`);
-        return null;
+        return { kind: "http-fail", status: res.status, retryAfterMs: retryAfter };
       }
       if (!res.ok) {
-        this.breaker.recordFailure(src.host);
-        return null;
+        return { kind: "http-fail", status: res.status, retryAfterMs: null };
       }
 
       const text = await res.text();
@@ -643,30 +873,31 @@ export class ResearchService {
       }
       if (!parsed) {
         // Unparsable page — likely a block/challenge page, not a clean answer.
-        this.breaker.recordFailure(src.host);
-        return null;
+        return { kind: "http-fail", status: res.status, retryAfterMs: null };
       }
       if (parsed.results.length === 0) {
         // Clean, healthy response that simply has no answer for this topic.
         this.breaker.recordSuccess(src.host);
-        return null;
+        return { kind: "clean" };
       }
       this.breaker.recordSuccess(src.host);
       return {
-        topic,
-        answer: parsed.answer,
-        sources: parsed.results.slice(0, 3),
-        sourceHosts: [src.host],
-        timestamp: this.now(),
-        cached: false,
+        kind: "hit",
+        finding: {
+          topic,
+          answer: parsed.answer,
+          sources: parsed.results.slice(0, 3),
+          sourceHosts: [src.host],
+          timestamp: this.now(),
+          cached: false,
+        },
       };
     } catch (e) {
       if (isAbortError(e)) {
         this.log(`research: ${src.name} timed out (${perSourceTimeout}ms)`);
-        this.breaker.recordFailure(src.host);
-        return null;
+        return { kind: "error" };
       }
-      throw e;
+      return { kind: "error" };
     } finally {
       clearTimeout(timer);
     }
@@ -682,6 +913,7 @@ export class ResearchService {
            source = excluded.source, created_at = CURRENT_TIMESTAMP`
       )
       .run(key, topic, JSON.stringify(finding), source);
+    this.db.prepare("DELETE FROM research_negcache WHERE key = ?").run(key);
 
     if (this.options.saveToKnowledge) {
       const title = `Research: ${topic.slice(0, 60)}`;
