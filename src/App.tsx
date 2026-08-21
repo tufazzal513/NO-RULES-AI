@@ -557,6 +557,48 @@ export default function App() {
     setTimeout(() => setToast(""), 3500);
   };
 
+  // ---- dataset export ----
+  // Reliable on every browser (incl. Android Chrome): fetch → blob → save.
+  // Shows a clear toast on errors or when there is no chat data yet.
+  const downloadDataset = async () => {
+    showToast("Preparing dataset…");
+    try {
+      const res = await fetch(`/api/v1/dataset/export?t=${Date.now()}`);
+      if (!res.ok) {
+        let msg = `Export failed (HTTP ${res.status})`;
+        try {
+          const j = await res.json();
+          if (j?.error) msg = j.error;
+        } catch { /* not json */ }
+        showToast(`❌ ${msg}`);
+        return;
+      }
+      const rows = Number(res.headers.get("X-Dataset-Rows") || "-1");
+      if (rows === 0) {
+        showToast("❌ No chat data yet — chat with your AI first, then export again");
+        return;
+      }
+      const blob = await res.blob();
+      if (blob.size === 0) {
+        showToast("❌ Export came back empty — chat a bit first, then try again");
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "myai-dataset.jsonl";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      showToast(`✅ Downloaded myai-dataset.jsonl (${rows.toLocaleString()} conversations)`);
+    } catch (err: any) {
+      // Last resort: let the browser handle the URL directly.
+      showToast("⚠️ Auto-download blocked — opening directly…");
+      window.open(`/api/v1/dataset/export?t=${Date.now()}`, "_blank");
+    }
+  };
+
   // ---- health / dashboard ----
   const [health, setHealth] = useState<any>({ status: "Checking…", api: "Checking…", database: "Checking…", model: "Checking…", telegram: "Checking…", stats: {} });
   const fetchHealth = async () => {
@@ -1843,9 +1885,9 @@ export default function App() {
               <button onClick={trainModel} className="flex-1 py-2.5 bg-[#1a73e8] hover:bg-[#2b7de2] text-white rounded-xl text-[13px] font-medium transition-colors flex items-center justify-center gap-1.5">
                 <Play size={14} /> Train on My Messages
               </button>
-              <a href="/api/v1/dataset/export" className="flex-1 py-2.5 bg-[#1a2b45] hover:bg-[#243a5c] text-[#8ab4f8] rounded-xl text-[13px] font-medium transition-colors flex items-center justify-center gap-1.5">
+              <button onClick={downloadDataset} className="flex-1 py-2.5 bg-[#1a2b45] hover:bg-[#243a5c] text-[#8ab4f8] rounded-xl text-[13px] font-medium transition-colors flex items-center justify-center gap-1.5">
                 <Download size={14} /> Export Dataset
-              </a>
+              </button>
             </div>
           </Card>
 
@@ -1959,9 +2001,9 @@ export default function App() {
         icon={<Database size={16} className="text-[#8ab4f8]" />}
         className="md:col-span-3"
         right={
-          <a href="/api/v1/dataset/export" className="px-3 py-1.5 bg-[#1a2b45] hover:bg-[#243a5c] text-[#8ab4f8] rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5">
+          <button onClick={downloadDataset} className="px-3 py-1.5 bg-[#1a2b45] hover:bg-[#243a5c] text-[#8ab4f8] rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5">
             <Download size={13} /> Export JSONL
-          </a>
+          </button>
         }
       >
         <div className="space-y-1 max-h-96 overflow-y-auto">

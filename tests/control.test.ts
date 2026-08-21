@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createAdminGate, adminTokenFrom } from "../server/auth.ts";
-import { datasetStats } from "../server/dataset.ts";
+import { datasetStats, exportDatasetJsonl } from "../server/dataset.ts";
 import { pushLog, recentLogs } from "../server/logs.ts";
 import { createMemoryDatabase } from "../server/db.ts";
 
@@ -72,6 +72,37 @@ test("dataset stats count chat pairs and break messages down by source", () => {
   assert.deepEqual(s.bySource, { web: 4, training: 2, telegram: 1 });
   assert.equal(s.knowledgeDocs, 1);
   assert.equal(s.researchFindings, 1);
+});
+
+test("exportDatasetJsonl turns user→ai pairs into ShareGPT-style JSONL", () => {
+  const db = createMemoryDatabase();
+  db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (1, 'user', 'hello')").run();
+  db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (1, 'ai', 'hi!')").run();
+  db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (1, 'user', 'how are you?')").run();
+  db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (1, 'ai', 'fine, thanks')").run();
+  // A second session with a trailing user turn that has no AI reply yet.
+  db.prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (2, 'user', 'unanswered')").run();
+
+  const { rows, body } = exportDatasetJsonl(db);
+  assert.equal(rows, 2);
+  const lines = body.trimEnd().split("\n");
+  assert.equal(lines.length, 2);
+  const parsed = lines.map((l) => JSON.parse(l));
+  assert.deepEqual(parsed[0].messages, [
+    { role: "user", content: "hello" },
+    { role: "assistant", content: "hi!" },
+  ]);
+  assert.deepEqual(parsed[1].messages, [
+    { role: "user", content: "how are you?" },
+    { role: "assistant", content: "fine, thanks" },
+  ]);
+});
+
+test("exportDatasetJsonl is a valid (empty) file when there is no data yet", () => {
+  const db = createMemoryDatabase();
+  const { rows, body } = exportDatasetJsonl(db);
+  assert.equal(rows, 0);
+  assert.equal(body, "");
 });
 
 // ---------------------------------------------------------------------------

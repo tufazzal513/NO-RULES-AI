@@ -12,7 +12,7 @@ import { buildSnapshot, serializeSnapshot } from "./server/snapshot.ts";
 import { CloudSync, parseBool } from "./server/cloud-sync.ts";
 import { pushLog, recentLogs } from "./server/logs.ts";
 import { createAdminGate, adminTokenFrom } from "./server/auth.ts";
-import { datasetStats } from "./server/dataset.ts";
+import { datasetStats, exportDatasetJsonl } from "./server/dataset.ts";
 import { planIngest, applyIngest } from "./server/ingest.ts";
 import { applyBuiltInSeed } from "./server/seed.ts";
 
@@ -1163,26 +1163,15 @@ app.delete("/api/v1/users/:id", (req, res) => {
 // Dataset export — conversation pairs in ShareGPT-style JSONL (for fine-tuning)
 app.get("/api/v1/dataset/export", (req, res) => {
   try {
-    const sessions = db.prepare("SELECT DISTINCT session_id FROM chat_messages").all() as { session_id: number }[];
-    const lines: string[] = [];
-    for (const s of sessions) {
-      const msgs = db.prepare("SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY id ASC").all(s.session_id) as { role: string; content: string }[];
-      for (let i = 0; i < msgs.length - 1; i++) {
-        if (msgs[i].role === "user" && msgs[i + 1].role === "ai") {
-          lines.push(
-            JSON.stringify({
-              messages: [
-                { role: "user", content: msgs[i].content },
-                { role: "assistant", content: msgs[i + 1].content },
-              ],
-            })
-          );
-        }
-      }
+    if (!db) {
+      return res.status(500).json({ error: "Database is not available yet. Try again in a few seconds." });
     }
+    const { rows, body } = exportDatasetJsonl(db);
     res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
-    res.setHeader("Content-Disposition", "attachment; filename=myai-dataset.jsonl");
-    res.send(lines.join("\n"));
+    res.setHeader("Content-Disposition", `attachment; filename="myai-dataset.jsonl"`);
+    res.setHeader("X-Dataset-Rows", String(rows));
+    res.setHeader("Cache-Control", "no-store");
+    res.send(body);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
