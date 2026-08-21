@@ -40,13 +40,46 @@ subprocess.run(['pip', 'install', '-q', '-U', 'unsloth'], check=True)
 subprocess.run(['pip', 'install', '-q', '-U', 'trl>=0.9', 'transformers>=4.44',
                 'datasets', 'accelerate', 'peft', 'bitsandbytes'], check=True)
 
-# ─── ৪) ট্রেনিং স্ক্রিপ্ট (মিসিং হলে নিজে ক্লোন করে) ─────────
-REPO_DIR = '/kaggle/working/NO-RULES-AI'
-if not os.path.isfile(os.path.join(REPO_DIR, 'training', 'train_lora.py')):
-    print('📦 রিপো ক্লোন হচ্ছে…')
-    subprocess.run(['git', 'clone', '-q', '--depth', '1',
-                    'https://github.com/tufazzal513/NO-RULES-AI.git', REPO_DIR], check=True)
-os.chdir(os.path.join(REPO_DIR, 'training'))
+# ─── ৪) ট্রেনিং ফাইল নামাও (git-এর দরকার নেই — সরাসরি ডাউনলোড) ─
+# রিপোটা PUBLIC হলে এই ফাইলগুলো raw.githubusercontent থেকে নামবে।
+import urllib.request
+
+TRAIN_DIR = '/kaggle/working/NO-RULES-AI/training'
+RAW_BASE = 'https://raw.githubusercontent.com/tufazzal513/NO-RULES-AI/main'
+REQUIRED = {
+    'training/train_lora.py': os.path.join(TRAIN_DIR, 'train_lora.py'),
+    'training/build_mix.py':  os.path.join(TRAIN_DIR, 'build_mix.py'),
+    'data/import/bangla-english-banglish-chat.jsonl': os.path.join(TRAIN_DIR, 'bangla-english-banglish-chat.jsonl'),
+}
+os.makedirs(TRAIN_DIR, exist_ok=True)
+all_ok = True
+for rel, dest in REQUIRED.items():
+    try:
+        urllib.request.urlretrieve(RAW_BASE + '/' + rel, dest)
+        size = os.path.getsize(dest)
+        if size < 1000:
+            raise RuntimeError(f'ছোট/ভুল ফাইল ({size} bytes)')
+        print('✅', rel, f'({size/1024:.0f} KB)')
+    except Exception as e:
+        all_ok = False
+        print('❌', rel, '→', e)
+
+if not all_ok:
+    print('''
+┌─────────────────────────────────────────────────────────────┐
+│ 🚨 রিপোতে অ্যাক্সেস হচ্ছে না!                              │
+│                                                             │
+│ কারণ: tufazzal513/NO-RULES-AI রিপোটা PRIVATE —             │
+│ Kaggle থেকে private রিপোর ফাইল নেওয়া যায় না।             │
+│                                                             │
+│ সমাধান (১ মিনিট):                                           │
+│   GitHub → NO-RULES-AI → Settings → General →              │
+│   Danger Zone → Change repository visibility →              │
+│   Change to public → তারপর Run All আবার দিন                 │
+└─────────────────────────────────────────────────────────────┘
+''')
+    raise SystemExit(1)
+os.chdir(TRAIN_DIR)
 
 # ─── ৫) নিজের ডাটা: /kaggle/input-এ যত .jsonl আছে সব নেবে ───
 extras = []
