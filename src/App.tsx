@@ -5,7 +5,7 @@
  * MY-AI control panel — Gemini-style chat interface (light theme).
  * -----------------------------------------------------------------
  * The whole app is styled after the Gemini web chat: white canvas,
- * #f0f4f9 sidebar with "New chat" pill + recent chats, centered
+ * #1e1f20 sidebar with "New chat" pill + recent chats, centered
  * conversation column, suggestion cards, pill-shaped composer and
  * the sparkle avatar for AI replies.
  */
@@ -16,7 +16,8 @@ import {
   Settings, DatabaseBackup, Terminal, Paperclip, Mic, Volume2, Trash2,
   Download, Play, Search, RefreshCw, WifiOff, Copy, BookMarked, ShieldCheck,
   Lock, CheckCircle2, CircleAlert, Clock, ArrowUp, Send, Pencil, Keyboard,
-  MessageSquare, Upload, PanelLeft,
+  MessageSquare, Upload, PanelLeft, Activity, ClipboardPaste, Loader2,
+  History,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------------ */
@@ -83,6 +84,31 @@ const fmtTime = (iso?: string | null) => {
   const mins = Math.round((Date.now() - d.getTime()) / 60000);
   const rel = mins < 1 ? "just now" : mins < 60 ? `${mins}m ago` : mins < 1440 ? `${Math.round(mins / 60)}h ago` : `${Math.round(mins / 1440)}d ago`;
   return `${d.toLocaleString()} (${rel})`;
+};
+
+const relTime = (iso?: string | null) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  const s = Math.round((Date.now() - d.getTime()) / 1000);
+  if (s < 5) return "just now";
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+};
+
+/** Friendly labels for the training triggers recorded in the journal. */
+const TRAIN_TRIGGERS: Record<string, { label: string; icon: string }> = {
+  manual: { label: "Manual", icon: "▶️" },
+  ingest: { label: "File import", icon: "📂" },
+  knowledge: { label: "Knowledge added", icon: "📚" },
+  memory: { label: "Memory saved", icon: "🧠" },
+  chat: { label: "Chat message", icon: "💬" },
+  startup: { label: "Startup", icon: "🚀" },
+  automatic: { label: "Automatic", icon: "✨" },
 };
 
 /* ------------------------------------------------------------------------ */
@@ -236,7 +262,7 @@ function ChatView({
           {messages.map((msg, idx) => (
             <div key={idx} className={`group flex gap-3 md:gap-4 ${msg.role === "user" ? "justify-end" : ""}`}>
               {msg.role === "ai" ? (
-                <div className="w-8 h-8 shrink-0 mt-0.5 rounded-full bg-[#f0f4f9] flex items-center justify-center">
+                <div className="w-8 h-8 shrink-0 mt-0.5 rounded-full bg-[#1e1f20] flex items-center justify-center">
                   <Sparkle size={18} />
                 </div>
               ) : (
@@ -248,7 +274,7 @@ function ChatView({
                 {msg.role === "user" ? (
                   editingId && msg.id === editingId ? (
                     /* ---- inline editor for an already-sent question ---- */
-                    <div className="bg-white border-2 border-[#d2e3fc] rounded-[22px] px-3 py-2.5">
+                    <div className="bg-[#1e1f20] border-2 border-[#243a5c] rounded-[22px] px-3 py-2.5">
                       <textarea
                         value={editDraft}
                         autoFocus
@@ -264,19 +290,19 @@ function ChatView({
                             cancelEdit();
                           }
                         }}
-                        className="w-full bg-transparent resize-none outline-none text-[15px] leading-relaxed text-[#1f1f1f]"
+                        className="w-full bg-transparent resize-none outline-none text-[15px] leading-relaxed text-[#e8eaed]"
                       />
                       <div className="flex items-center justify-end gap-2 mt-1.5">
-                        <span className="mr-auto text-[10px] text-[#5f6368]">Enter দিয়ে save · Esc দিয়ে cancel</span>
+                        <span className="mr-auto text-[10px] text-[#9aa0a6]">Enter দিয়ে save · Esc দিয়ে cancel</span>
                         <button
                           onClick={cancelEdit}
-                          className="px-3 py-1.5 text-[12px] rounded-full bg-[#f0f4f9] hover:bg-[#e9eef6] transition-colors"
+                          className="px-3 py-1.5 text-[12px] rounded-full bg-[#1e1f20] hover:bg-[#282a2c] transition-colors"
                         >
                           Cancel
                         </button>
                         <button
                           onClick={() => void commitEdit(msg)}
-                          className="px-3 py-1.5 text-[12px] rounded-full bg-[#1a1a1a] text-white hover:bg-[#333] transition-colors"
+                          className="px-3 py-1.5 text-[12px] rounded-full bg-[#e8eaed] text-[#131314] hover:bg-[#ffffff] transition-colors"
                         >
                           Save & rerun
                         </button>
@@ -284,7 +310,7 @@ function ChatView({
                     </div>
                   ) : (
                     <div className="flex flex-col items-end">
-                      <div className="bg-[#eff1f3] text-[#1f1f1f] px-4 py-2.5 rounded-[22px] leading-relaxed whitespace-pre-wrap text-[15px]">
+                      <div className="bg-[#282a2c] text-[#e8eaed] px-4 py-2.5 rounded-[22px] leading-relaxed whitespace-pre-wrap text-[15px]">
                         {msg.content}
                       </div>
                       <div className="mt-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
@@ -292,7 +318,7 @@ function ChatView({
                           <button
                             onClick={() => beginEdit(msg)}
                             title="Edit this message (⌘/Ctrl + ↑ for the last one)"
-                            className="p-1.5 text-[#5f6368] hover:text-[#1f1f1f] hover:bg-[#f0f4f9] rounded-full transition-colors"
+                            className="p-1.5 text-[#9aa0a6] hover:text-[#e8eaed] hover:bg-[#1e1f20] rounded-full transition-colors"
                           >
                             <Pencil size={14} />
                           </button>
@@ -300,7 +326,7 @@ function ChatView({
                         <button
                           onClick={() => navigator.clipboard?.writeText(msg.content)}
                           title="Copy"
-                          className="p-1.5 text-[#5f6368] hover:text-[#1f1f1f] hover:bg-[#f0f4f9] rounded-full transition-colors"
+                          className="p-1.5 text-[#9aa0a6] hover:text-[#e8eaed] hover:bg-[#1e1f20] rounded-full transition-colors"
                         >
                           <Copy size={14} />
                         </button>
@@ -308,7 +334,7 @@ function ChatView({
                           <button
                             onClick={() => void onDelete(msg)}
                             title="Delete this message and its answer"
-                            className="p-1.5 text-[#5f6368] hover:text-[#c5221f] hover:bg-[#fce8e6] rounded-full transition-colors"
+                            className="p-1.5 text-[#9aa0a6] hover:text-[#f28b82] hover:bg-[#3c2424] rounded-full transition-colors"
                           >
                             <Trash2 size={14} />
                           </button>
@@ -318,17 +344,17 @@ function ChatView({
                   )
                 ) : (
                   <div>
-                    <div className="text-sm leading-relaxed whitespace-pre-wrap text-[#1f1f1f]">{msg.content}</div>
+                    <div className="text-sm leading-relaxed whitespace-pre-wrap text-[#e8eaed]">{msg.content}</div>
                     <div className="mt-1.5 flex items-center gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
                       {msg.mode && modeMeta[msg.mode] && (
-                        <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-[#5f6368] bg-[#f0f4f9] border border-[#e3e3e3] px-2 py-0.5 rounded-full">
+                        <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-[#9aa0a6] bg-[#1e1f20] border border-[#3c4043] px-2 py-0.5 rounded-full">
                           {modeMeta[msg.mode].icon} {modeMeta[msg.mode].label}
                         </span>
                       )}
                       <button
                         onClick={() => navigator.clipboard?.writeText(msg.content)}
                         title="Copy"
-                        className="p-1.5 text-[#5f6368] hover:text-[#1f1f1f] hover:bg-[#f0f4f9] rounded-full transition-colors"
+                        className="p-1.5 text-[#9aa0a6] hover:text-[#e8eaed] hover:bg-[#1e1f20] rounded-full transition-colors"
                       >
                         <Copy size={15} />
                       </button>
@@ -342,7 +368,7 @@ function ChatView({
                           if (lastUser) onSend(lastUser.content);
                         }}
                         title="Regenerate this answer"
-                        className="p-1.5 text-[#5f6368] hover:text-[#1f1f1f] hover:bg-[#f0f4f9] rounded-full transition-colors"
+                        className="p-1.5 text-[#9aa0a6] hover:text-[#e8eaed] hover:bg-[#1e1f20] rounded-full transition-colors"
                       >
                         <RefreshCw size={15} />
                       </button>
@@ -353,14 +379,14 @@ function ChatView({
                           window.speechSynthesis?.speak(u);
                         }}
                         title="Speak"
-                        className="p-1.5 text-[#5f6368] hover:text-[#1f1f1f] hover:bg-[#f0f4f9] rounded-full transition-colors"
+                        className="p-1.5 text-[#9aa0a6] hover:text-[#e8eaed] hover:bg-[#1e1f20] rounded-full transition-colors"
                       >
                         <Volume2 size={15} />
                       </button>
                       <button
                         onClick={() => onSave(msg)}
                         title="Save to knowledge (training data)"
-                        className="p-1.5 text-[#5f6368] hover:text-[#1f1f1f] hover:bg-[#f0f4f9] rounded-full transition-colors"
+                        className="p-1.5 text-[#9aa0a6] hover:text-[#e8eaed] hover:bg-[#1e1f20] rounded-full transition-colors"
                       >
                         <BookMarked size={15} />
                       </button>
@@ -373,11 +399,11 @@ function ChatView({
 
           {isTyping && (
             <div className="flex gap-3 md:gap-4">
-              <div className="w-8 h-8 shrink-0 rounded-full bg-[#f0f4f9] flex items-center justify-center">
+              <div className="w-8 h-8 shrink-0 rounded-full bg-[#1e1f20] flex items-center justify-center">
                 <Sparkle size={18} />
               </div>
               <div className="flex-1 pt-1">
-                <div className="text-[15px] text-[#1f1f1f]">{variant === "training" ? "প্রশিক্ষণ চলছে" : "Thinking"}…</div>
+                <div className="text-[15px] text-[#e8eaed]">{variant === "training" ? "প্রশিক্ষণ চলছে" : "Thinking"}…</div>
                 <div className="mt-2 flex items-center gap-2">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#4E7DF5] soft-pulse" />
                   <span className="w-1.5 h-1.5 rounded-full bg-[#4E7DF5] soft-pulse" style={{ animationDelay: "0.2s" }} />
@@ -394,7 +420,7 @@ function ChatView({
                   <button
                     key={s}
                     onClick={() => onSend(s)}
-                    className="text-left bg-[#f0f4f9] hover:bg-[#e9eef6] rounded-2xl px-4 py-3.5 text-[14px] text-[#1f1f1f] leading-snug transition-colors"
+                    className="text-left bg-[#1e1f20] hover:bg-[#282a2c] rounded-2xl px-4 py-3.5 text-[14px] text-[#e8eaed] leading-snug transition-colors"
                   >
                     {s}
                   </button>
@@ -407,12 +433,12 @@ function ChatView({
       </div>
 
       {/* Composer — Gemini-style pill */}
-      <div className="shrink-0 bg-gradient-to-t from-white via-white to-transparent px-3 pb-3 pt-6">
+      <div className="shrink-0 bg-gradient-to-t from-[#131314] via-[#131314] to-transparent px-3 pb-3 pt-6">
         <div className="max-w-[800px] mx-auto">
           {attachMsg && (
-            <div className="mb-2 text-xs text-[#1a73e8] bg-[#e8f0fe] border border-[#d2e3fc] rounded-xl px-3 py-2">{attachMsg}</div>
+            <div className="mb-2 text-xs text-[#8ab4f8] bg-[#1a2b45] border border-[#243a5c] rounded-xl px-3 py-2">{attachMsg}</div>
           )}
-          <div className="flex items-end gap-1 bg-[#f0f4f9] rounded-[28px] px-2 py-2 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+          <div className="flex items-end gap-1 bg-[#1e1f20] rounded-[28px] px-2 py-2 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
             <input
               ref={fileRef}
               type="file"
@@ -427,7 +453,7 @@ function ChatView({
             <button
               onClick={() => fileRef.current?.click()}
               title="Attach a text file (saved as a knowledge document)"
-              className="p-2.5 text-[#444746] hover:bg-[#e9eef6] rounded-full transition-colors shrink-0"
+              className="p-2.5 text-[#3c4043] hover:bg-[#282a2c] rounded-full transition-colors shrink-0"
             >
               <Paperclip size={20} />
             </button>
@@ -441,13 +467,13 @@ function ChatView({
               onKeyDown={handleKey}
               placeholder={variant === "training" ? "প্রশিক্ষণ চ্যাট — এখানে লিখুন…" : "Message MY-AI…"}
               rows={1}
-              className="flex-1 bg-transparent resize-none outline-none text-[15px] leading-6 text-[#1f1f1f] placeholder-[#80868b] py-2 px-1 max-h-40"
+              className="flex-1 bg-transparent resize-none outline-none text-[15px] leading-6 text-[#e8eaed] placeholder-[#6b7075] py-2 px-1 max-h-40"
             />
             {micSupported && (
               <button
                 onClick={startMic}
                 title="Voice input"
-                className={`p-2.5 rounded-full transition-colors shrink-0 ${listening ? "text-[#1a73e8] bg-[#d2e3fc]" : "text-[#444746] hover:bg-[#e9eef6]"}`}
+                className={`p-2.5 rounded-full transition-colors shrink-0 ${listening ? "text-[#8ab4f8] bg-[#243a5c]" : "text-[#3c4043] hover:bg-[#282a2c]"}`}
               >
                 <Mic size={20} />
               </button>
@@ -457,14 +483,14 @@ function ChatView({
               disabled={!input.trim() && !isTyping}
               className={`ml-1 p-2 rounded-full transition-all shrink-0 ${
                 input.trim()
-                  ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
-                  : "bg-[#c4c7c5] text-white cursor-default"
+                  ? "bg-[#e8eaed] text-[#131314] hover:bg-[#ffffff]"
+                  : "bg-[#3c4043] text-[#9aa0a6] cursor-default"
               }`}
             >
               {input.trim() ? <ArrowUp size={20} /> : <Send size={18} />}
             </button>
           </div>
-          <div className="text-center mt-2.5 text-[11px] text-[#5f6368]">
+          <div className="text-center mt-2.5 text-[11px] text-[#9aa0a6]">
             MY-AI can make mistakes. Consider verifying important information.
           </div>
         </div>
@@ -479,10 +505,10 @@ function ChatView({
 
 function Card({ title, icon, children, className = "", right }: { title?: string; icon?: React.ReactNode; children: React.ReactNode; className?: string; right?: React.ReactNode }) {
   return (
-    <div className={`bg-white border border-[#e3e3e3] rounded-3xl p-4 md:p-5 ${className}`}>
+    <div className={`bg-[#1e1f20] border border-[#3c4043] rounded-3xl p-4 md:p-5 ${className}`}>
       {title && (
         <div className="flex items-center justify-between gap-2 mb-3">
-          <div className="flex items-center gap-2 text-[13px] font-medium text-[#1f1f1f]">
+          <div className="flex items-center gap-2 text-[13px] font-medium text-[#e8eaed]">
             {icon}
             {title}
           </div>
@@ -496,10 +522,10 @@ function Card({ title, icon, children, className = "", right }: { title?: string
 
 function StatChip({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
   return (
-    <div className="bg-[#f8f9fa] border border-[#e3e3e3] rounded-2xl p-3.5">
-      <div className="text-[11px] text-[#5f6368]">{label}</div>
-      <div className="mt-1 text-lg font-medium text-[#1f1f1f]">{value}</div>
-      {sub && <div className="mt-0.5 text-[11px] text-[#5f6368]">{sub}</div>}
+    <div className="bg-[#282a2c] border border-[#3c4043] rounded-2xl p-3.5">
+      <div className="text-[11px] text-[#9aa0a6]">{label}</div>
+      <div className="mt-1 text-lg font-medium text-[#e8eaed]">{value}</div>
+      {sub && <div className="mt-0.5 text-[11px] text-[#9aa0a6]">{sub}</div>}
     </div>
   );
 }
@@ -853,6 +879,60 @@ export default function App() {
     }
   };
 
+  // ---- background training journal (live view of the AI self-training) ----
+  const [training, setTraining] = useState<any>({ running: false, scheduled: false, scheduledInMs: null, progress: 0, phase: null, lastRun: null, runs: [] });
+  const [pasteTitle, setPasteTitle] = useState("");
+  const [pasteContent, setPasteContent] = useState("");
+  const [pasteBusy, setPasteBusy] = useState(false);
+
+  const fetchTraining = async () => {
+    try {
+      const d = await api("/api/v1/ai/training");
+      setTraining(d ?? {});
+      if (d && !d.running && !d.scheduled) refreshBrain();
+    } catch {
+      /* keep last */
+    }
+  };
+
+  // Poll the training journal — fast while a run is in flight, slow otherwise.
+  useEffect(() => {
+    fetchTraining();
+    const interval = setInterval(() => {
+      fetchTraining();
+    }, training.running || training.scheduled ? 500 : 4000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [training.running, training.scheduled]);
+
+  /** Push pasted text as training data — same pipeline as a file import. */
+  const pushPasteData = async () => {
+    const content = pasteContent.trim();
+    if (!content || pasteBusy) return;
+    setPasteBusy(true);
+    setBrainMsg("Pushing text as training data…");
+    try {
+      const name = pasteTitle.trim() ? `${pasteTitle.trim().slice(0, 60)}.txt` : `pasted-${new Date().toISOString().slice(0, 16)}.txt`;
+      const d = await api("/api/v1/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files: [{ name, content }] }),
+      });
+      setPasteTitle("");
+      setPasteContent("");
+      setBrainMsg(
+        `Pushed ✓ — ${d.knowledgeInserted} knowledge chunks + ${d.pairsInserted} Q/A pairs. Background train started ✨`
+      );
+      refreshBrain();
+      loadSessions();
+      fetchTraining();
+    } catch (e: any) {
+      setBrainMsg("Error: " + e.message);
+    } finally {
+      setPasteBusy(false);
+    }
+  };
+
   const ingestFiles = async (list: FileList | File[]) => {
     const files = Array.from(list).slice(0, 40);
     if (files.length === 0) return;
@@ -874,6 +954,7 @@ export default function App() {
       );
       refreshBrain();
       loadSessions();
+      fetchTraining();
     } catch (e: any) {
       setBrainMsg("Error: " + e.message);
     } finally {
@@ -882,11 +963,10 @@ export default function App() {
   };
 
   const trainModel = async () => {
-    setBrainMsg("Training…");
+    setBrainMsg("Training started — watch the live progress above ⬆️");
     try {
-      const d = await api("/api/v1/ai/train", { method: "POST" });
-      setBrainMsg(`Trained on ${d.stats?.trainedMessages ?? 0} messages. Model ready! ✨`);
-      refreshBrain();
+      await api("/api/v1/ai/train", { method: "POST" });
+      fetchTraining();
     } catch (e: any) {
       setBrainMsg("Error: " + e.message);
     }
@@ -1363,12 +1443,12 @@ export default function App() {
 
   const renderDashboard = () => (
     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-      <StatChip label="API" value={<span className="text-[#188038]">{health.api}</span>} sub={`Status: ${health.status}`} />
+      <StatChip label="API" value={<span className="text-[#81c995]">{health.api}</span>} sub={`Status: ${health.status}`} />
       <StatChip label="Database" value={health.database} sub={health.stats?.totalUsers != null ? `${health.stats.totalUsers} users` : undefined} />
       <StatChip label="Active Model" value={health.model} sub={aiStatus.trained ? `Trained · ${aiStatus.modelChains ?? 0} chains` : "Not trained yet"} />
       <StatChip label="Telegram Storage" value={health.telegram} sub={tgStatus.botUsername ? `@${tgStatus.botUsername}` : "Backups via Telegram"} />
 
-      <Card title="System metrics" icon={<LayoutDashboard size={16} className="text-[#1a73e8]" />} className="md:col-span-2 xl:col-span-3">
+      <Card title="System metrics" icon={<LayoutDashboard size={16} className="text-[#8ab4f8]" />} className="md:col-span-2 xl:col-span-3">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <StatChip label="Total Users" value={health.stats?.totalUsers ?? "…"} />
           <StatChip label="Conversations" value={health.stats?.totalConversations ?? "…"} />
@@ -1377,24 +1457,24 @@ export default function App() {
         </div>
       </Card>
 
-      <Card title="Quick actions" icon={<ShieldCheck size={16} className="text-[#188038]" />}>
+      <Card title="Quick actions" icon={<ShieldCheck size={16} className="text-[#81c995]" />}>
         <div className="space-y-2.5">
-          <button onClick={triggerBackup} className="w-full py-2.5 bg-[#e6f4ea] hover:bg-[#ceead6] text-[#188038] rounded-xl text-[13px] font-medium transition-colors">
+          <button onClick={triggerBackup} className="w-full py-2.5 bg-[#173f2a] hover:bg-[#21563a] text-[#81c995] rounded-xl text-[13px] font-medium transition-colors">
             💾 Backup DB to Telegram
           </button>
           <button
             onClick={() => tgAction("snapshot", { force: true })}
-            className="w-full py-2.5 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-xl text-[13px] font-medium transition-colors"
+            className="w-full py-2.5 bg-[#1a2b45] hover:bg-[#243a5c] text-[#8ab4f8] rounded-xl text-[13px] font-medium transition-colors"
           >
             📦 Snapshot Now
           </button>
           <button
             onClick={() => api("/api/v1/users/seed", { method: "POST" }).then(() => { fetchHealth(); showToast("Test user created"); }).catch((e) => showToast("⚠️ " + e.message))}
-            className="w-full py-2.5 bg-[#fef7e0] hover:bg-[#feefc3] text-[#b06000] rounded-xl text-[13px] font-medium transition-colors"
+            className="w-full py-2.5 bg-[#3c2f14] hover:bg-[#4a3a18] text-[#fdd663] rounded-xl text-[13px] font-medium transition-colors"
           >
             🌱 Seed Test User
           </button>
-          <button onClick={() => selectTab("training")} className="w-full py-2.5 bg-[#f0f4f9] hover:bg-[#e9eef6] text-[#444746] rounded-xl text-[13px] font-medium transition-colors">
+          <button onClick={() => selectTab("training")} className="w-full py-2.5 bg-[#1e1f20] hover:bg-[#282a2c] text-[#3c4043] rounded-xl text-[13px] font-medium transition-colors">
             🎓 Open Training
           </button>
         </div>
@@ -1416,36 +1496,36 @@ export default function App() {
 
         <Card
           title="Sources & cooldowns"
-          icon={<Globe size={16} className="text-[#1a73e8]" />}
+          icon={<Globe size={16} className="text-[#8ab4f8]" />}
           className="md:col-span-2"
           right={
             <div className="flex items-center gap-1.5">
-              <button onClick={runSelftest} disabled={selftestBusy} className="px-3 py-1.5 bg-[#1a73e8] hover:bg-[#1765cc] disabled:opacity-50 text-white rounded-lg text-xs font-medium transition-colors flex items-center gap-1">
+              <button onClick={runSelftest} disabled={selftestBusy} className="px-3 py-1.5 bg-[#1a73e8] hover:bg-[#2b7de2] disabled:opacity-50 text-white rounded-lg text-xs font-medium transition-colors flex items-center gap-1">
                 {selftestBusy ? "…" : (<><CheckCircle2 size={12} /> Test all sources</>)}
               </button>
-              <button onClick={() => resetResearch(false)} className="px-3 py-1.5 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-lg text-xs font-medium transition-colors flex items-center gap-1">
+              <button onClick={() => resetResearch(false)} className="px-3 py-1.5 bg-[#1a2b45] hover:bg-[#243a5c] text-[#8ab4f8] rounded-lg text-xs font-medium transition-colors flex items-center gap-1">
                 <RefreshCw size={12} /> Reset Cooldowns
               </button>
             </div>
           }
         >
           <div className="space-y-1.5 max-h-[380px] overflow-y-auto pr-1">
-            {sources.length === 0 && <div className="text-[13px] text-[#5f6368] p-4 text-center">Loading source status…</div>}
+            {sources.length === 0 && <div className="text-[13px] text-[#9aa0a6] p-4 text-center">Loading source status…</div>}
             {selftest?.sources && (
-              <div className="mb-2 p-2.5 bg-[#f8f9fa] border border-[#e3e3e3] rounded-xl text-[11px] text-[#5f6368]">
+              <div className="mb-2 p-2.5 bg-[#282a2c] border border-[#3c4043] rounded-xl text-[11px] text-[#9aa0a6]">
                 Self-test: {selftest.sources.filter((x: any) => x.pass).length} pass · {selftest.sources.filter((x: any) => !x.pass && !x.skipped).length} fail · {selftest.sources.filter((x: any) => x.skipped).length} skipped
               </div>
             )}
             {sources.map((s: any) => (
-              <div key={`${s.name}-${s.host}`} className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl hover:bg-[#f8f9fa]">
+              <div key={`${s.name}-${s.host}`} className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl hover:bg-[#282a2c]">
                 <div className="min-w-0">
-                  <div className="text-[13px] text-[#1f1f1f] truncate">{s.name}</div>
-                  <div className="text-[11px] text-[#5f6368] font-mono truncate">{s.host}</div>
+                  <div className="text-[13px] text-[#e8eaed] truncate">{s.name}</div>
+                  <div className="text-[11px] text-[#9aa0a6] font-mono truncate">{s.host}</div>
                 </div>
                 {s.ready ? (
-                  <span className="shrink-0 inline-flex items-center gap-1 text-[11px] text-[#188038] bg-[#e6f4ea] border border-[#ceead6] px-2 py-0.5 rounded-full">● Ready</span>
+                  <span className="shrink-0 inline-flex items-center gap-1 text-[11px] text-[#81c995] bg-[#173f2a] border border-[#21563a] px-2 py-0.5 rounded-full">● Ready</span>
                 ) : (
-                  <span className="shrink-0 inline-flex items-center gap-1 text-[11px] text-[#b06000] bg-[#fef7e0] border border-[#feefc3] px-2 py-0.5 rounded-full" title={`${s.failures} failure(s)`}>
+                  <span className="shrink-0 inline-flex items-center gap-1 text-[11px] text-[#fdd663] bg-[#3c2f14] border border-[#4a3a18] px-2 py-0.5 rounded-full" title={`${s.failures} failure(s)`}>
                     <WifiOff size={11} /> {fmtCooldown(s.cooldownRemainingMs)}
                   </span>
                 )}
@@ -1456,10 +1536,10 @@ export default function App() {
 
         <Card
           title="Try a topic"
-          icon={<Search size={16} className="text-[#1a73e8]" />}
+          icon={<Search size={16} className="text-[#8ab4f8]" />}
           className="md:col-span-2"
           right={
-            <button onClick={() => resetResearch(true)} className="px-3 py-1.5 bg-[#f0f4f9] hover:bg-[#e9eef6] text-[#444746] rounded-lg text-xs font-medium transition-colors">
+            <button onClick={() => resetResearch(true)} className="px-3 py-1.5 bg-[#1e1f20] hover:bg-[#282a2c] text-[#3c4043] rounded-lg text-xs font-medium transition-colors">
               Clear Cache
             </button>
           }
@@ -1470,19 +1550,19 @@ export default function App() {
               onChange={(e) => setResearchTopic(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && runResearch()}
               placeholder="e.g. latest Bangladesh cricket news"
-              className="flex-1 min-w-0 bg-[#f0f4f9] border border-transparent focus:border-[#d2e3fc] rounded-xl px-3 py-2.5 text-sm outline-none placeholder:text-[#80868b]"
+              className="flex-1 min-w-0 bg-[#282a2c] border border-[#3c4043] focus:border-[#8ab4f8] rounded-xl px-3 py-2.5 text-sm outline-none placeholder:text-[#6b7075]"
             />
-            <button onClick={runResearch} disabled={researchBusy} className="px-4 py-2.5 bg-[#1a73e8] hover:bg-[#1765cc] disabled:opacity-50 text-white rounded-xl text-sm font-medium transition-colors flex items-center gap-1.5 shrink-0">
+            <button onClick={runResearch} disabled={researchBusy} className="px-4 py-2.5 bg-[#1a73e8] hover:bg-[#2b7de2] disabled:opacity-50 text-white rounded-xl text-sm font-medium transition-colors flex items-center gap-1.5 shrink-0">
               {researchBusy ? "…" : (<><Search size={14} /> Search</>)}
             </button>
           </div>
-          <div className="text-xs text-[#5f6368] mb-3">
+          <div className="text-xs text-[#9aa0a6] mb-3">
             In chat, question-like messages are researched automatically — or type /research &lt;topic&gt;.
             English, বাংলা and Banglish all work: a Banglish question ("Bangladesher rajdhani ki?") is
             transliterated to Bengali before searching, and every hit is scored for relevance so an
             unrelated result is never returned as the answer.
           </div>
-          {researchMsg && <div className="text-xs text-[#1a73e8] p-2.5 bg-[#e8f0fe] border border-[#d2e3fc] rounded-lg mb-3">{researchMsg}</div>}
+          {researchMsg && <div className="text-xs text-[#8ab4f8] p-2.5 bg-[#1a2b45] border border-[#243a5c] rounded-lg mb-3">{researchMsg}</div>}
           {researchResult && (
             <div>
               {researchResult.ok && researchResult.data?.finding && (
@@ -1491,8 +1571,8 @@ export default function App() {
                     <span
                       className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full border ${
                         researchResult.data.finding.confidence >= 0.62
-                          ? "bg-[#e6f4ea] text-[#188038] border-[#ceead6]"
-                          : "bg-[#fef7e0] text-[#b06000] border-[#feefc3]"
+                          ? "bg-[#173f2a] text-[#81c995] border-[#21563a]"
+                          : "bg-[#3c2f14] text-[#fdd663] border-[#4a3a18]"
                       }`}
                       title="How well the answer matches the question"
                     >
@@ -1501,23 +1581,23 @@ export default function App() {
                     </span>
                   )}
                   {researchResult.data.finding.query && (
-                    <span className="text-[11px] text-[#5f6368] bg-[#f0f4f9] border border-[#e3e3e3] px-2 py-0.5 rounded-full font-mono truncate max-w-full">
+                    <span className="text-[11px] text-[#9aa0a6] bg-[#1e1f20] border border-[#3c4043] px-2 py-0.5 rounded-full font-mono truncate max-w-full">
                       searched: {researchResult.data.finding.query}
                     </span>
                   )}
                   {(researchResult.data.finding.sourceHosts ?? []).map((h: string) => (
-                    <span key={h} className="text-[11px] text-[#5f6368] bg-[#f0f4f9] border border-[#e3e3e3] px-2 py-0.5 rounded-full font-mono">
+                    <span key={h} className="text-[11px] text-[#9aa0a6] bg-[#1e1f20] border border-[#3c4043] px-2 py-0.5 rounded-full font-mono">
                       {h}
                     </span>
                   ))}
                   {researchResult.data.finding.cached && (
-                    <span className="text-[11px] text-[#5f6368] bg-[#f0f4f9] border border-[#e3e3e3] px-2 py-0.5 rounded-full">
+                    <span className="text-[11px] text-[#9aa0a6] bg-[#1e1f20] border border-[#3c4043] px-2 py-0.5 rounded-full">
                       {researchResult.data.finding.stale ? "stale cache" : "cached"}
                     </span>
                   )}
                 </div>
               )}
-              <div className="p-3.5 bg-[#f8f9fa] rounded-xl border border-[#e3e3e3] text-[13px] leading-relaxed text-[#1f1f1f] overflow-y-auto max-h-[280px] whitespace-pre-wrap">
+              <div className="p-3.5 bg-[#282a2c] rounded-xl border border-[#3c4043] text-[13px] leading-relaxed text-[#e8eaed] overflow-y-auto max-h-[280px] whitespace-pre-wrap">
                 {researchResult.ok ? researchResult.data?.finding?.answer : researchResult.message}
               </div>
               {researchResult.ok && (researchResult.data?.finding?.sources ?? []).length > 0 && (
@@ -1528,7 +1608,7 @@ export default function App() {
                       href={src.url}
                       target="_blank"
                       rel="noreferrer"
-                      className="block text-[11px] text-[#1a73e8] hover:underline truncate"
+                      className="block text-[11px] text-[#8ab4f8] hover:underline truncate"
                     >
                       🔗 {src.title || src.url}
                     </a>
@@ -1538,7 +1618,7 @@ export default function App() {
             </div>
           )}
           {!researchResult && (
-            <div className="flex flex-col justify-center items-center text-center text-[#80868b] py-8">
+            <div className="flex flex-col justify-center items-center text-center text-[#6b7075] py-8">
               <Globe size={26} className="mb-2 opacity-40" />
               <div className="text-xs">17 keyless sources · circuit breakers · negative cache · rate cap</div>
             </div>
@@ -1552,13 +1632,13 @@ export default function App() {
     if (authStatus.passwordRequired && !authStatus.adminAuthed) {
       return (
         <div className="max-w-md mx-auto mt-10">
-          <Card title="🔒 Admin only" icon={<Lock size={16} className="text-[#b06000]" />}>
-            <p className="text-[13px] text-[#5f6368] leading-relaxed mb-4">
+          <Card title="🔒 Admin only" icon={<Lock size={16} className="text-[#fdd663]" />}>
+            <p className="text-[13px] text-[#9aa0a6] leading-relaxed mb-4">
               এই ট্যাবে কেবল admin প্রশিক্ষণ দিতে পারেন (ADMIN_PASSWORD চালু আছে)। পাসওয়ার্ড দিয়ে unlock করুন।
             </p>
             <button
               onClick={() => setPasswordModal(true)}
-              className="w-full py-2.5 bg-[#1a73e8] hover:bg-[#1765cc] text-white rounded-xl text-sm font-medium transition-colors"
+              className="w-full py-2.5 bg-[#1a73e8] hover:bg-[#2b7de2] text-white rounded-xl text-sm font-medium transition-colors"
             >
               Unlock with password
             </button>
@@ -1566,13 +1646,108 @@ export default function App() {
         </div>
       );
     }
+    const runs = (training?.runs ?? []) as any[];
+    const current = training?.currentRun ?? null;
+    const progress = Math.max(0, Math.min(100, Number(training?.progress ?? 0)));
+    const phase = training?.phase ?? null;
+    const running = !!training?.running;
+    const scheduled = !!training?.scheduled;
+    const phases = (current?.phases?.length ? current.phases : training?.lastRun?.phases ?? []) as any[];
+
     return (
-      <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
-        {/* Training chat — chat with the AI right here, admin only */}
-        <div className="xl:col-span-3 flex flex-col bg-white border border-[#e3e3e3] rounded-3xl overflow-hidden" style={{ minHeight: 560 }}>
-          <div className="px-4 md:px-5 py-3 border-b border-[#e3e3e3] flex items-center justify-between gap-2 shrink-0">
+      <div className="space-y-4">
+        {/* ---- Background training — live view of the AI training itself ---- */}
+        <Card
+          title="Background training — live"
+          icon={<Activity size={16} className="text-[#8ab4f8]" />}
+          right={
             <div className="flex items-center gap-2">
-              <GraduationCap size={16} className="text-[#1a73e8]" />
+              {running ? (
+                <span className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full bg-[#1a2b45] text-[#8ab4f8]">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#8ab4f8] soft-pulse" /> Running
+                </span>
+              ) : scheduled ? (
+                <span className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full bg-[#3c2f14] text-[#fdd663]">
+                  <Clock size={11} /> Scheduled
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full bg-[#173f2a] text-[#81c995]">
+                  <CheckCircle2 size={11} /> Idle
+                </span>
+              )}
+              <button
+                onClick={() => void trainModel()}
+                disabled={running}
+                className="px-3 py-1.5 bg-[#1a73e8] hover:bg-[#2b7de2] disabled:opacity-50 text-white rounded-lg text-xs font-medium transition-colors flex items-center gap-1"
+              >
+                {running ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} Train now
+              </button>
+            </div>
+          }
+        >
+          <div className="flex items-end justify-between mb-1.5 gap-3">
+            <div className="text-[13px] text-[#e8eaed]">
+              {running ? (
+                <>AI-টা নিজে নিজে background-এ training করছে… <span className="text-[#8ab4f8] font-medium">{phase ?? "working"}</span></>
+              ) : scheduled ? (
+                <>Training scheduled — {training?.scheduledInMs ?? 0}ms পরে background-এ শুরু হবে…</>
+              ) : training?.lastRun ? (
+                <>Last run {relTime(training.lastRun.startedAt)} · {training.lastRun.result?.trainedMessages ?? 0} messages → {training.lastRun.result?.modelChains ?? 0} chains</>
+              ) : (
+                <>এখনো কোনো training run হয়নি — data push করুন বা “Train now” চাপুন।</>
+              )}
+            </div>
+            <div className="text-[12px] text-[#9aa0a6] shrink-0">{progress}%</div>
+          </div>
+          <div className="h-2.5 rounded-full bg-[#282a2c] overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-300 ${running ? "bg-[#8ab4f8] train-stripe" : "bg-[#81c995]"}`}
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          {brainMsg && (
+            <div className="mt-3 text-xs text-[#e8eaed] p-2.5 bg-[#282a2c] border border-[#3c4043] rounded-lg">{brainMsg}</div>
+          )}
+
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <div className="text-[11px] font-medium text-[#9aa0a6] mb-1.5 uppercase tracking-wider">Training steps</div>
+              <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
+                {phases.length === 0 && <div className="text-[11px] text-[#9aa0a6]">No steps recorded yet.</div>}
+                {phases.map((p: any, i: number) => (
+                  <div key={i} className="flex items-start gap-2 text-[11px]">
+                    <span className="text-[#81c995] mt-px shrink-0">✓</span>
+                    <span className="text-[#9aa0a6] shrink-0 font-mono">{p.at ? new Date(p.at).toLocaleTimeString() : ""}</span>
+                    <span className="text-[#e8eaed]">{p.name}</span>
+                    {p.detail && <span className="text-[#9aa0a6]">— {p.detail}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="text-[11px] font-medium text-[#9aa0a6] mb-1.5 uppercase tracking-wider flex items-center gap-1"><History size={11} /> Run history</div>
+              <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
+                {runs.length === 0 && <div className="text-[11px] text-[#9aa0a6]">No runs yet — import data or press “Train now”.</div>}
+                {runs.map((r: any) => (
+                  <div key={r.id} className="flex items-center gap-2 text-[11px] py-0.5">
+                    <span>{TRAIN_TRIGGERS[r.trigger]?.icon ?? "✨"}</span>
+                    <span className="text-[#e8eaed]">{TRAIN_TRIGGERS[r.trigger]?.label ?? r.trigger}</span>
+                    <span className="text-[#9aa0a6]">→ {r.result?.modelChains ?? 0} chains · {r.result?.vocabSize ?? 0} vocab</span>
+                    <span className="ml-auto text-[#9aa0a6] shrink-0">{relTime(r.startedAt)}</span>
+                    {r.ok ? <CheckCircle2 size={11} className="text-[#81c995] shrink-0" /> : <CircleAlert size={11} className="text-[#f28b82] shrink-0" />}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
+        {/* Training chat — chat with the AI right here, admin only */}
+        <div className="xl:col-span-3 flex flex-col bg-[#1e1f20] border border-[#3c4043] rounded-3xl overflow-hidden" style={{ minHeight: 560 }}>
+          <div className="px-4 md:px-5 py-3 border-b border-[#3c4043] flex items-center justify-between gap-2 shrink-0">
+            <div className="flex items-center gap-2">
+              <GraduationCap size={16} className="text-[#8ab4f8]" />
               <span className="text-[13px] font-medium">প্রশিক্ষণ চ্যাট — messages are stored as training data</span>
             </div>
             {tActiveId && (
@@ -1582,7 +1757,7 @@ export default function App() {
                   setTActiveId(null);
                   setTMessages([{ role: "ai", content: "প্রশিক্ষণ চ্যাট — এখানে যা-ই লিখবেন, সব training data হিসেবে save হবে। ✍️" }]);
                 }}
-                className="text-[11px] text-[#5f6368] hover:text-[#1f1f1f] flex items-center gap-1"
+                className="text-[11px] text-[#9aa0a6] hover:text-[#e8eaed] flex items-center gap-1"
               >
                 <Trash2 size={13} /> Reset
               </button>
@@ -1606,21 +1781,8 @@ export default function App() {
         </div>
 
         <div className="xl:col-span-2 space-y-4">
-          <Card title="Local AI model" icon={<GraduationCap size={16} className="text-[#1a73e8]" />}>
-            <div className="text-xl font-medium text-[#1f1f1f]">{aiStatus.trained ? "Trained ✓" : "Not trained yet"}</div>
-            <div className="mt-1.5 text-xs text-[#5f6368]">
-              Messages: {aiStatus.corpusMessages ?? "…"} · Knowledge: {aiStatus.knowledgeDocs ?? "…"} · Memory: {aiStatus.memoryFacts ?? "…"}
-              {aiStatus.trained && <> · Chains: {aiStatus.modelChains} · Vocab: {aiStatus.vocabSize}</>}
-            </div>
-            <div className="mt-3 flex gap-2">
-              <button onClick={trainModel} className="flex-1 py-2.5 bg-[#1a73e8] hover:bg-[#1765cc] text-white rounded-xl text-[13px] font-medium transition-colors flex items-center justify-center gap-1.5">
-                <Play size={14} /> Train on My Messages
-              </button>
-              <a href="/api/v1/dataset/export" className="flex-1 py-2.5 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-xl text-[13px] font-medium transition-colors flex items-center justify-center gap-1.5">
-                <Download size={14} /> Export Dataset
-              </a>
-            </div>
-            {brainMsg && <div className="mt-3 text-xs text-[#1f1f1f] p-2.5 bg-[#f8f9fa] rounded-lg">{brainMsg}</div>}
+          {/* Push training data — file import AND paste-text box */}
+          <Card title="Push training data" icon={<ClipboardPaste size={16} className="text-[#c58af9]" />}>
             <input
               ref={ingestRef}
               type="file"
@@ -1635,43 +1797,86 @@ export default function App() {
             <button
               onClick={() => ingestRef.current?.click()}
               disabled={ingestBusy}
-              className="mt-2 w-full py-2.5 bg-[#f3e8fd] hover:bg-[#e9d5fb] disabled:opacity-50 text-[#7627bb] rounded-xl text-[13px] font-medium transition-colors flex items-center justify-center gap-1.5"
+              className="w-full py-2.5 bg-[#3a2550] hover:bg-[#4a3166] disabled:opacity-50 text-[#c58af9] rounded-xl text-[13px] font-medium transition-colors flex items-center justify-center gap-1.5"
             >
-              <Upload size={14} /> {ingestBusy ? "Importing…" : "Import .txt / .jsonl corpus (auto-train)"}
+              {ingestBusy ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} {ingestBusy ? "Importing…" : "Import files (.txt / .md / .jsonl)"}
             </button>
-            <p className="mt-2 text-[11px] text-[#5f6368] leading-snug">
-              Other-AI dumps, Bangla/English language files, or User:/AI: transcripts. Saved as knowledge; the small brain retrains in the background.
+            <p className="mt-1.5 text-[11px] text-[#9aa0a6] leading-snug">
+              Other-AI dumps, Bangla/English language files, বা User:/AI: transcripts। Knowledge + Q/A pair হিসেবে save হয়, তারপর background-এ auto-train চলে।
             </p>
+
+            <div className="my-3 flex items-center gap-2 text-[11px] text-[#9aa0a6]">
+              <span className="flex-1 h-px bg-[#3c4043]" />
+              বা text paste করুন
+              <span className="flex-1 h-px bg-[#3c4043]" />
+            </div>
+
+            <input
+              value={pasteTitle}
+              onChange={(e) => setPasteTitle(e.target.value)}
+              placeholder="Title (optional)"
+              className="w-full bg-[#282a2c] border border-[#3c4043] focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-[13px] outline-none placeholder:text-[#6b7075] mb-2"
+            />
+            <textarea
+              value={pasteContent}
+              onChange={(e) => setPasteContent(e.target.value)}
+              placeholder={"এখানে যেকোনো text, transcript বা Q/A dialogue paste করুন…\nযেমন:\nUser: amar nam ki?\nAI: Apnar nam Tufazzal."}
+              rows={5}
+              className="w-full bg-[#282a2c] border border-[#3c4043] focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-[13px] outline-none placeholder:text-[#6b7075] resize-none leading-relaxed"
+            />
+            <button
+              onClick={pushPasteData}
+              disabled={pasteBusy || !pasteContent.trim()}
+              className="mt-2 w-full py-2.5 bg-[#1a73e8] hover:bg-[#2b7de2] disabled:opacity-50 text-white rounded-xl text-[13px] font-medium transition-colors flex items-center justify-center gap-1.5"
+            >
+              {pasteBusy ? <Loader2 size={14} className="animate-spin" /> : <ClipboardPaste size={14} />} {pasteBusy ? "Pushing…" : "Push data & auto-train"}
+            </button>
           </Card>
 
-          <Card title="Knowledge 📚" icon={<BookMarked size={16} className="text-[#188038]" />}>
+          <Card title="Local AI model" icon={<GraduationCap size={16} className="text-[#8ab4f8]" />}>
+            <div className="text-xl font-medium text-[#e8eaed]">{aiStatus.trained ? "Trained ✓" : "Not trained yet"}</div>
+            <div className="mt-1.5 text-xs text-[#9aa0a6]">
+              Messages: {aiStatus.corpusMessages ?? "…"} · Knowledge: {aiStatus.knowledgeDocs ?? "…"} · Memory: {aiStatus.memoryFacts ?? "…"}
+              {aiStatus.trained && <> · Chains: {aiStatus.modelChains} · Vocab: {aiStatus.vocabSize}</>}
+            </div>
+            <div className="mt-3 flex gap-2">
+              <button onClick={trainModel} className="flex-1 py-2.5 bg-[#1a73e8] hover:bg-[#2b7de2] text-white rounded-xl text-[13px] font-medium transition-colors flex items-center justify-center gap-1.5">
+                <Play size={14} /> Train on My Messages
+              </button>
+              <a href="/api/v1/dataset/export" className="flex-1 py-2.5 bg-[#1a2b45] hover:bg-[#243a5c] text-[#8ab4f8] rounded-xl text-[13px] font-medium transition-colors flex items-center justify-center gap-1.5">
+                <Download size={14} /> Export Dataset
+              </a>
+            </div>
+          </Card>
+
+          <Card title="Knowledge 📚" icon={<BookMarked size={16} className="text-[#81c995]" />}>
             <div className="space-y-2 mb-3">
               <input
                 value={knowTitle}
                 onChange={(e) => setKnowTitle(e.target.value)}
                 placeholder="Title"
-                className="w-full bg-[#f0f4f9] border border-transparent focus:border-[#d2e3fc] rounded-lg px-3 py-2 text-[13px] outline-none placeholder:text-[#80868b]"
+                className="w-full bg-[#282a2c] border border-[#3c4043] focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-[13px] outline-none placeholder:text-[#6b7075]"
               />
               <textarea
                 value={knowContent}
                 onChange={(e) => setKnowContent(e.target.value)}
                 placeholder="Paste your notes, documents, or anything the AI should know…"
                 rows={2}
-                className="w-full bg-[#f0f4f9] border border-transparent focus:border-[#d2e3fc] rounded-lg px-3 py-2 text-[13px] outline-none placeholder:text-[#80868b] resize-none"
+                className="w-full bg-[#282a2c] border border-[#3c4043] focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-[13px] outline-none placeholder:text-[#6b7075] resize-none"
               />
-              <button onClick={addKnowledge} className="w-full py-2 bg-[#e6f4ea] hover:bg-[#ceead6] text-[#188038] rounded-lg text-[13px] font-medium transition-colors">
+              <button onClick={addKnowledge} className="w-full py-2 bg-[#173f2a] hover:bg-[#21563a] text-[#81c995] rounded-lg text-[13px] font-medium transition-colors">
                 Add Knowledge
               </button>
             </div>
             <div className="space-y-1.5 max-h-44 overflow-y-auto">
-              {knowledge.length === 0 && <div className="text-xs text-[#5f6368] text-center p-3">No knowledge yet.</div>}
+              {knowledge.length === 0 && <div className="text-xs text-[#9aa0a6] text-center p-3">No knowledge yet.</div>}
               {knowledge.map((k: any) => (
-                <div key={k.id} className="flex justify-between items-start gap-2 px-2.5 py-2 rounded-lg hover:bg-[#f8f9fa]">
+                <div key={k.id} className="flex justify-between items-start gap-2 px-2.5 py-2 rounded-lg hover:bg-[#282a2c]">
                   <div className="min-w-0">
-                    <div className="text-xs font-medium text-[#1f1f1f] truncate">{k.title}</div>
-                    <div className="text-[11px] text-[#5f6368] truncate">{k.content.slice(0, 70)}</div>
+                    <div className="text-xs font-medium text-[#e8eaed] truncate">{k.title}</div>
+                    <div className="text-[11px] text-[#9aa0a6] truncate">{k.content.slice(0, 70)}</div>
                   </div>
-                  <button onClick={() => deleteKnowledge(k.id)} className="p-1 text-[#5f6368] hover:text-[#c5221f] shrink-0">
+                  <button onClick={() => deleteKnowledge(k.id)} className="p-1 text-[#9aa0a6] hover:text-[#f28b82] shrink-0">
                     <Trash2 size={13} />
                   </button>
                 </div>
@@ -1685,33 +1890,34 @@ export default function App() {
                 value={memKey}
                 onChange={(e) => setMemKey(e.target.value)}
                 placeholder="Key"
-                className="flex-1 min-w-0 bg-[#f0f4f9] border border-transparent focus:border-[#d2e3fc] rounded-lg px-3 py-2 text-[13px] outline-none placeholder:text-[#80868b]"
+                className="flex-1 min-w-0 bg-[#282a2c] border border-[#3c4043] focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-[13px] outline-none placeholder:text-[#6b7075]"
               />
               <input
                 value={memValue}
                 onChange={(e) => setMemValue(e.target.value)}
                 placeholder="Value"
-                className="flex-1 min-w-0 bg-[#f0f4f9] border border-transparent focus:border-[#d2e3fc] rounded-lg px-3 py-2 text-[13px] outline-none placeholder:text-[#80868b]"
+                className="flex-1 min-w-0 bg-[#282a2c] border border-[#3c4043] focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-[13px] outline-none placeholder:text-[#6b7075]"
               />
-              <button onClick={addMemory} className="px-3 py-2 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-lg text-[13px] font-medium shrink-0">
+              <button onClick={addMemory} className="px-3 py-2 bg-[#1a2b45] hover:bg-[#243a5c] text-[#8ab4f8] rounded-lg text-[13px] font-medium shrink-0">
                 Save
               </button>
             </div>
             <div className="space-y-1.5 max-h-44 overflow-y-auto">
-              {memory.length === 0 && <div className="text-xs text-[#5f6368] text-center p-3">No memories yet — try "My name is …" in chat.</div>}
+              {memory.length === 0 && <div className="text-xs text-[#9aa0a6] text-center p-3">No memories yet — try "My name is …" in chat.</div>}
               {memory.map((m: any) => (
-                <div key={m.id} className="flex justify-between items-center gap-2 px-2.5 py-2 rounded-lg hover:bg-[#f8f9fa]">
+                <div key={m.id} className="flex justify-between items-center gap-2 px-2.5 py-2 rounded-lg hover:bg-[#282a2c]">
                   <div className="min-w-0">
-                    <div className="text-xs font-medium text-[#1f1f1f] truncate">{m.key}</div>
-                    <div className="text-[11px] text-[#5f6368] truncate">{m.value}</div>
+                    <div className="text-xs font-medium text-[#e8eaed] truncate">{m.key}</div>
+                    <div className="text-[11px] text-[#9aa0a6] truncate">{m.value}</div>
                   </div>
-                  <button onClick={() => deleteMemory(m.id)} className="p-1 text-[#5f6368] hover:text-[#c5221f] shrink-0">
+                  <button onClick={() => deleteMemory(m.id)} className="p-1 text-[#9aa0a6] hover:text-[#f28b82] shrink-0">
                     <Trash2 size={13} />
                   </button>
                 </div>
               ))}
             </div>
           </Card>
+          </div>
         </div>
       </div>
     );
@@ -1723,54 +1929,54 @@ export default function App() {
       <StatChip label="Messages" value={dataset?.totalMessages ?? "…"} sub={`${dataset?.userMessages ?? 0} user · ${dataset?.aiMessages ?? 0} AI`} />
       <StatChip label="Training pairs" value={dataset?.pairs ?? "…"} sub="user → ai (JSONL ready)" />
 
-      <Card title="Where training data comes from (2 places)" icon={<Database size={16} className="text-[#1a73e8]" />} className="md:col-span-3">
+      <Card title="Where training data comes from (2 places)" icon={<Database size={16} className="text-[#8ab4f8]" />} className="md:col-span-3">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div className="bg-[#f8f9fa] border border-[#e3e3e3] rounded-2xl p-3.5">
-            <div className="text-[11px] text-[#5f6368] mb-1">১. Chat messages</div>
+          <div className="bg-[#282a2c] border border-[#3c4043] rounded-2xl p-3.5">
+            <div className="text-[11px] text-[#9aa0a6] mb-1">১. Chat messages</div>
             <div className="flex flex-wrap gap-1.5">
               {(Object.entries(dataset?.bySource ?? {}) as [string, number][]).map(([s, n]) => (
-                <span key={s} className="text-[11px] bg-white border border-[#e3e3e3] px-2 py-0.5 rounded-full">
+                <span key={s} className="text-[11px] bg-[#1e1f20] border border-[#3c4043] px-2 py-0.5 rounded-full">
                   {s}: {n}
                 </span>
               ))}
             </div>
           </div>
-          <div className="bg-[#f8f9fa] border border-[#e3e3e3] rounded-2xl p-3.5">
-            <div className="text-[11px] text-[#5f6368] mb-1">২. Research findings → knowledge</div>
-            <div className="text-sm text-[#1f1f1f]">
-              {dataset?.researchFindings ?? "…"} <span className="text-[11px] text-[#5f6368]">of {dataset?.knowledgeDocs ?? "…"} docs</span>
+          <div className="bg-[#282a2c] border border-[#3c4043] rounded-2xl p-3.5">
+            <div className="text-[11px] text-[#9aa0a6] mb-1">২. Research findings → knowledge</div>
+            <div className="text-sm text-[#e8eaed]">
+              {dataset?.researchFindings ?? "…"} <span className="text-[11px] text-[#9aa0a6]">of {dataset?.knowledgeDocs ?? "…"} docs</span>
             </div>
           </div>
-          <div className="bg-[#f8f9fa] border border-[#e3e3e3] rounded-2xl p-3.5">
-            <div className="text-[11px] text-[#5f6368] mb-1">Trained model</div>
-            <div className="text-sm text-[#1f1f1f]">{dataset?.modelChains ?? 0} chains · {dataset?.vocabSize ?? 0} vocab</div>
+          <div className="bg-[#282a2c] border border-[#3c4043] rounded-2xl p-3.5">
+            <div className="text-[11px] text-[#9aa0a6] mb-1">Trained model</div>
+            <div className="text-sm text-[#e8eaed]">{dataset?.modelChains ?? 0} chains · {dataset?.vocabSize ?? 0} vocab</div>
           </div>
         </div>
       </Card>
 
       <Card
         title="Conversations"
-        icon={<Database size={16} className="text-[#1a73e8]" />}
+        icon={<Database size={16} className="text-[#8ab4f8]" />}
         className="md:col-span-3"
         right={
-          <a href="/api/v1/dataset/export" className="px-3 py-1.5 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5">
+          <a href="/api/v1/dataset/export" className="px-3 py-1.5 bg-[#1a2b45] hover:bg-[#243a5c] text-[#8ab4f8] rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5">
             <Download size={13} /> Export JSONL
           </a>
         }
       >
         <div className="space-y-1 max-h-96 overflow-y-auto">
-          {sessions.length === 0 && <div className="text-[13px] text-[#5f6368] p-4 text-center">No conversations yet.</div>}
+          {sessions.length === 0 && <div className="text-[13px] text-[#9aa0a6] p-4 text-center">No conversations yet.</div>}
           {sessions.map((s) => (
-            <div key={s.id} className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl hover:bg-[#f8f9fa]">
+            <div key={s.id} className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl hover:bg-[#282a2c]">
               <div className="min-w-0">
-                <div className="text-[13px] text-[#1f1f1f] truncate">{s.title || `Chat #${s.id}`}</div>
-                <div className="text-[11px] text-[#5f6368]">#{s.id} · {s.created_at}</div>
+                <div className="text-[13px] text-[#e8eaed] truncate">{s.title || `Chat #${s.id}`}</div>
+                <div className="text-[11px] text-[#9aa0a6]">#{s.id} · {s.created_at}</div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                <button onClick={() => { setActiveId(s.id); selectTab("chat"); }} className="px-2.5 py-1 text-[11px] bg-[#f0f4f9] hover:bg-[#e9eef6] rounded-lg transition-colors">
+                <button onClick={() => { setActiveId(s.id); selectTab("chat"); }} className="px-2.5 py-1 text-[11px] bg-[#1e1f20] hover:bg-[#282a2c] rounded-lg transition-colors">
                   Open
                 </button>
-                <button onClick={() => deleteChat(s.id)} className="p-1.5 text-[#5f6368] hover:text-[#c5221f] transition-colors">
+                <button onClick={() => deleteChat(s.id)} className="p-1.5 text-[#9aa0a6] hover:text-[#f28b82] transition-colors">
                   <Trash2 size={14} />
                 </button>
               </div>
@@ -1783,35 +1989,35 @@ export default function App() {
 
   const renderUsers = () => (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <Card title="Add user" icon={<Users size={16} className="text-[#1a73e8]" />}>
+      <Card title="Add user" icon={<Users size={16} className="text-[#8ab4f8]" />}>
         <div className="space-y-2">
           <input
             value={userNameIn}
             onChange={(e) => setUserNameIn(e.target.value)}
             placeholder="Name"
-            className="w-full bg-[#f0f4f9] border border-transparent focus:border-[#d2e3fc] rounded-lg px-3 py-2 text-[13px] outline-none placeholder:text-[#80868b]"
+            className="w-full bg-[#282a2c] border border-[#3c4043] focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-[13px] outline-none placeholder:text-[#6b7075]"
           />
           <input
             value={userEmail}
             onChange={(e) => setUserEmail(e.target.value)}
             placeholder="Email"
-            className="w-full bg-[#f0f4f9] border border-transparent focus:border-[#d2e3fc] rounded-lg px-3 py-2 text-[13px] outline-none placeholder:text-[#80868b]"
+            className="w-full bg-[#282a2c] border border-[#3c4043] focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-[13px] outline-none placeholder:text-[#6b7075]"
           />
-          <button onClick={addUser} className="w-full py-2 bg-[#1a73e8] hover:bg-[#1765cc] text-white rounded-lg text-[13px] font-medium transition-colors">
+          <button onClick={addUser} className="w-full py-2 bg-[#1a73e8] hover:bg-[#2b7de2] text-white rounded-lg text-[13px] font-medium transition-colors">
             Add User
           </button>
         </div>
       </Card>
-      <Card title={`All users (${users.length})`} icon={<Users size={16} className="text-[#188038]" />} className="md:col-span-2">
+      <Card title={`All users (${users.length})`} icon={<Users size={16} className="text-[#81c995]" />} className="md:col-span-2">
         <div className="space-y-1.5 max-h-96 overflow-y-auto">
-          {users.length === 0 && <div className="text-[13px] text-[#5f6368] p-4 text-center">No users yet — add one or seed a test user from the Dashboard.</div>}
+          {users.length === 0 && <div className="text-[13px] text-[#9aa0a6] p-4 text-center">No users yet — add one or seed a test user from the Dashboard.</div>}
           {users.map((u) => (
-            <div key={u.id} className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl hover:bg-[#f8f9fa]">
+            <div key={u.id} className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl hover:bg-[#282a2c]">
               <div className="min-w-0">
-                <div className="text-[13px] text-[#1f1f1f] truncate">{u.name}</div>
-                <div className="text-[11px] text-[#5f6368] truncate">{u.email} · joined {u.created_at}</div>
+                <div className="text-[13px] text-[#e8eaed] truncate">{u.name}</div>
+                <div className="text-[11px] text-[#9aa0a6] truncate">{u.email} · joined {u.created_at}</div>
               </div>
-              <button onClick={() => deleteUser(u.id)} className="p-1.5 text-[#5f6368] hover:text-[#c5221f] transition-colors shrink-0">
+              <button onClick={() => deleteUser(u.id)} className="p-1.5 text-[#9aa0a6] hover:text-[#f28b82] transition-colors shrink-0">
                 <Trash2 size={14} />
               </button>
             </div>
@@ -1824,40 +2030,40 @@ export default function App() {
   const renderTelegram = () => {
     const state: string = tgStatus.state || "starting";
     const stateInfo: Record<string, { label: string; cls: string }> = {
-      ready: { label: "Ready", cls: "bg-[#e6f4ea] text-[#188038] border-[#ceead6]" },
-      restoring: { label: "Restoring…", cls: "bg-[#fef7e0] text-[#b06000] border-[#feefc3]" },
-      starting: { label: "Starting…", cls: "bg-[#e8f0fe] text-[#1a73e8] border-[#d2e3fc]" },
-      restore_failed: { label: "Restore Failed", cls: "bg-[#fce8e6] text-[#c5221f] border-[#f5c6c2]" },
+      ready: { label: "Ready", cls: "bg-[#173f2a] text-[#81c995] border-[#21563a]" },
+      restoring: { label: "Restoring…", cls: "bg-[#3c2f14] text-[#fdd663] border-[#4a3a18]" },
+      starting: { label: "Starting…", cls: "bg-[#1a2b45] text-[#8ab4f8] border-[#243a5c]" },
+      restore_failed: { label: "Restore Failed", cls: "bg-[#3c2424] text-[#f28b82] border-[#5c3230]" },
     };
     const si = stateInfo[state] || stateInfo.starting;
     const busy = !!tgActionStatus || tgStatus.snapshotInProgress || tgStatus.restoreInProgress;
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Card title="Telegram Cloud Database" icon={<DatabaseBackup size={16} className="text-[#b06000]" />} className="md:col-span-2">
+        <Card title="Telegram Cloud Database" icon={<DatabaseBackup size={16} className="text-[#fdd663]" />} className="md:col-span-2">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
               <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-[13px] font-medium ${si.cls}`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${state === "ready" ? "bg-[#188038]" : "bg-current soft-pulse"}`} />
+                <span className={`w-1.5 h-1.5 rounded-full ${state === "ready" ? "bg-[#81c995]" : "bg-current soft-pulse"}`} />
                 {si.label}
               </span>
-              <div className="mt-2.5 text-xs text-[#5f6368] space-y-0.5">
+              <div className="mt-2.5 text-xs text-[#9aa0a6] space-y-0.5">
                 <div>Connection: {tgStatus.configured ? "✅ configured" : "❌ not configured"}</div>
                 <div>Bot Token: {tgStatus.botTokenSet ? "✅ set" : "❌ missing"} · Channel ID: {tgStatus.chatIdSet ? "✅ set" : "❌ missing"}</div>
                 {tgStatus.botUsername && <div>Bot: @{tgStatus.botUsername}</div>}
                 {tgStatus.channelTitle && <div>Channel: {tgStatus.channelTitle}</div>}
               </div>
             </div>
-            <button onClick={() => tgAction("verify")} className="shrink-0 px-4 py-2.5 bg-[#e6f4ea] hover:bg-[#ceead6] text-[#188038] rounded-xl text-[13px] font-medium transition-colors">
+            <button onClick={() => tgAction("verify")} className="shrink-0 px-4 py-2.5 bg-[#173f2a] hover:bg-[#21563a] text-[#81c995] rounded-xl text-[13px] font-medium transition-colors">
               Verify Connection
             </button>
           </div>
           {state === "restore_failed" && (
-            <div className="mt-3 p-3 bg-[#fce8e6] border border-[#f5c6c2] rounded-xl text-xs text-[#c5221f] break-words">
+            <div className="mt-3 p-3 bg-[#3c2424] border border-[#5c3230] rounded-xl text-xs text-[#f28b82] break-words">
               ⚠️ Restore failed — local data was NOT modified and the Telegram bot is paused.
               {tgStatus.lastError && <div className="mt-1 font-mono text-[10px] opacity-80">{tgStatus.lastError}</div>}
               <button
                 onClick={dismissRestoreFailure}
-                className="mt-2.5 px-3 py-1.5 bg-white/70 hover:bg-white text-[#c5221f] border border-[#f5c6c2] rounded-lg text-[11px] font-medium transition-colors"
+                className="mt-2.5 px-3 py-1.5 bg-[#282a2c] hover:bg-[#282a2c] text-[#f28b82] border border-[#5c3230] rounded-lg text-[11px] font-medium transition-colors"
               >
                 Continue with local data (restart the bot)
               </button>
@@ -1872,9 +2078,9 @@ export default function App() {
           <StatChip label="Auto Restore" value={tgStatus.autoRestoreEnabled ? "On at startup" : "Off"} sub={tgStatus.restoreOnEmptyOnly ? "Only when the local DB is empty" : "Always on startup"} />
         </div>
 
-        <Card title="Cloud actions" icon={<DatabaseBackup size={16} className="text-[#1a73e8]" />}>
+        <Card title="Cloud actions" icon={<DatabaseBackup size={16} className="text-[#8ab4f8]" />}>
           <div className="space-y-2.5">
-            <button onClick={() => tgAction("snapshot", { force: true })} disabled={busy} className="w-full py-2.5 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-xl text-[13px] font-medium transition-all disabled:opacity-50">
+            <button onClick={() => tgAction("snapshot", { force: true })} disabled={busy} className="w-full py-2.5 bg-[#1a2b45] hover:bg-[#243a5c] text-[#8ab4f8] rounded-xl text-[13px] font-medium transition-all disabled:opacity-50">
               📦 Backup Now
             </button>
             <button
@@ -1882,14 +2088,14 @@ export default function App() {
                 if (confirm("Restore the latest Telegram snapshot? This replaces the current local database.")) tgAction("restore", { force: true });
               }}
               disabled={busy}
-              className="w-full py-2.5 bg-[#fef7e0] hover:bg-[#feefc3] text-[#b06000] rounded-xl text-[13px] font-medium transition-all disabled:opacity-50"
+              className="w-full py-2.5 bg-[#3c2f14] hover:bg-[#4a3a18] text-[#fdd663] rounded-xl text-[13px] font-medium transition-all disabled:opacity-50"
             >
               ♻️ Restore Latest
             </button>
-            <button onClick={() => tgAction("sync")} disabled={busy} className="w-full py-2.5 bg-[#f0f4f9] hover:bg-[#e9eef6] text-[#444746] rounded-xl text-[13px] font-medium transition-all disabled:opacity-50">
+            <button onClick={() => tgAction("sync")} disabled={busy} className="w-full py-2.5 bg-[#1e1f20] hover:bg-[#282a2c] text-[#3c4043] rounded-xl text-[13px] font-medium transition-all disabled:opacity-50">
               🔄 Mirror All Records to Telegram
             </button>
-            <a href="/api/v1/telegram/snapshot/download" className="block w-full py-2.5 text-center bg-[#f0f4f9] hover:bg-[#e9eef6] text-[#444746] rounded-xl text-[13px] font-medium transition-all">
+            <a href="/api/v1/telegram/snapshot/download" className="block w-full py-2.5 text-center bg-[#1e1f20] hover:bg-[#282a2c] text-[#3c4043] rounded-xl text-[13px] font-medium transition-all">
               ⬇️ Download Snapshot (JSON)
             </a>
             <input
@@ -1908,35 +2114,35 @@ export default function App() {
             <button
               onClick={() => snapshotFileRef.current?.click()}
               disabled={busy}
-              className="w-full py-2.5 bg-[#f3e8fd] hover:bg-[#e9d5fb] text-[#7627bb] rounded-xl text-[13px] font-medium transition-all disabled:opacity-50"
+              className="w-full py-2.5 bg-[#3a2550] hover:bg-[#4a3166] text-[#c58af9] rounded-xl text-[13px] font-medium transition-all disabled:opacity-50"
             >
               ⬆️ Restore from file (.json / .json.gz)
             </button>
-            <p className="text-[11px] text-[#5f6368] leading-snug pt-1">
+            <p className="text-[11px] text-[#9aa0a6] leading-snug pt-1">
               Telegram-এ সমস্যা হলে (ভুল channel id, bot admin নয়, pin মুছে গেছে) — ডাউনলোড করা snapshot ফাইল দিয়েই সব ডেটা ফিরিয়ে আনতে পারবেন।
             </p>
           </div>
-          {tgActionStatus && <div className="mt-3 text-center text-xs text-[#5f6368] p-2 bg-[#f8f9fa] rounded-lg">{tgActionStatus}</div>}
+          {tgActionStatus && <div className="mt-3 text-center text-xs text-[#9aa0a6] p-2 bg-[#282a2c] rounded-lg">{tgActionStatus}</div>}
           {tgResult && (
-            <div className={`mt-3 text-xs p-3 rounded-lg break-words ${tgResult.ok ? "bg-[#e6f4ea] text-[#188038] border border-[#ceead6]" : "bg-[#fce8e6] text-[#c5221f] border border-[#f5c6c2]"}`}>
+            <div className={`mt-3 text-xs p-3 rounded-lg break-words ${tgResult.ok ? "bg-[#173f2a] text-[#81c995] border border-[#21563a]" : "bg-[#3c2424] text-[#f28b82] border border-[#5c3230]"}`}>
               {tgResult.message}
-              {tgResult.data?.checksum && <div className="mt-2 font-mono text-[10px] text-[#5f6368] break-all">checksum: {tgResult.data.checksum}</div>}
+              {tgResult.data?.checksum && <div className="mt-2 font-mono text-[10px] text-[#9aa0a6] break-all">checksum: {tgResult.data.checksum}</div>}
             </div>
           )}
         </Card>
 
-        <Card title={`Snapshots (${tgSnapshots.length})`} icon={<Clock size={16} className="text-[#188038]" />}>
+        <Card title={`Snapshots (${tgSnapshots.length})`} icon={<Clock size={16} className="text-[#81c995]" />}>
           <div className="space-y-1.5 max-h-64 overflow-y-auto">
-            {tgSnapshots.length === 0 && <div className="text-xs text-[#5f6368] text-center p-4">No snapshots yet. Press "Backup Now".</div>}
+            {tgSnapshots.length === 0 && <div className="text-xs text-[#9aa0a6] text-center p-4">No snapshots yet. Press "Backup Now".</div>}
             {tgSnapshots.map((s: any) => (
-              <div key={s.id} className="px-2.5 py-2 rounded-lg hover:bg-[#f8f9fa]">
-                <div className="text-[10px] text-[#5f6368] font-mono break-all">{s.telegram_file_id}</div>
+              <div key={s.id} className="px-2.5 py-2 rounded-lg hover:bg-[#282a2c]">
+                <div className="text-[10px] text-[#9aa0a6] font-mono break-all">{s.telegram_file_id}</div>
                 <div className="mt-1 flex items-center justify-between gap-2">
-                  <span className="text-[10px] text-[#5f6368]">msg {s.telegram_message_id} · {s.created_at}</span>
+                  <span className="text-[10px] text-[#9aa0a6]">msg {s.telegram_message_id} · {s.created_at}</span>
                   <button
                     onClick={() => tgAction("restore", { fileId: s.telegram_file_id, force: true })}
                     disabled={busy}
-                    className="shrink-0 px-2 py-1 text-[10px] bg-[#fef7e0] hover:bg-[#feefc3] text-[#b06000] border border-[#feefc3] rounded-md disabled:opacity-50"
+                    className="shrink-0 px-2 py-1 text-[10px] bg-[#3c2f14] hover:bg-[#4a3a18] text-[#fdd663] border border-[#4a3a18] rounded-md disabled:opacity-50"
                   >
                     Restore
                   </button>
@@ -1954,7 +2160,7 @@ export default function App() {
     const tg = settings?.telegram ?? {};
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Card title="🔎 Online research" icon={<Globe size={16} className="text-[#1a73e8]" />} className="md:col-span-2">
+        <Card title="🔎 Online research" icon={<Globe size={16} className="text-[#8ab4f8]" />} className="md:col-span-2">
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
             <StatChip label="Enabled" value={r.enabled ? "On" : "Off"} />
             <StatChip label="Cache TTL" value={`${r.cacheTtlMinutes} min`} />
@@ -1964,50 +2170,50 @@ export default function App() {
             <StatChip label="Requests / minute cap" value={r.maxRequestsPerMinute ?? 60} />
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
-            <button onClick={() => resetResearch(false)} className="px-3 py-2 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5">
+            <button onClick={() => resetResearch(false)} className="px-3 py-2 bg-[#1a2b45] hover:bg-[#243a5c] text-[#8ab4f8] rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5">
               <RefreshCw size={13} /> Reset Cooldowns
             </button>
-            <button onClick={() => resetResearch(true)} className="px-3 py-2 bg-[#f0f4f9] hover:bg-[#e9eef6] text-[#444746] rounded-lg text-xs font-medium transition-colors">
+            <button onClick={() => resetResearch(true)} className="px-3 py-2 bg-[#1e1f20] hover:bg-[#282a2c] text-[#3c4043] rounded-lg text-xs font-medium transition-colors">
               Clear Research Cache
             </button>
           </div>
         </Card>
 
-        <Card title="☁️ Telegram cloud" icon={<DatabaseBackup size={16} className="text-[#188038]" />}>
-          <div className="space-y-2 text-[13px] text-[#1f1f1f]">
-            <div className="flex justify-between"><span className="text-[#5f6368]">Configured</span><span>{tg.configured ? "✅" : "❌"}</span></div>
-            <div className="flex justify-between"><span className="text-[#5f6368]">Bot token set</span><span>{tg.botTokenSet ? "✅" : "❌"}</span></div>
-            <div className="flex justify-between"><span className="text-[#5f6368]">Storage channel set</span><span>{tg.storageChatIdSet ? "✅" : "❌"}</span></div>
-            <div className="flex justify-between"><span className="text-[#5f6368]">Bot running</span><span>{tg.botRunning ? "✅" : "❌"}</span></div>
-            <div className="flex justify-between"><span className="text-[#5f6368]">Auto restore</span><span>{tg.autoRestore ? "On" : "Off"}</span></div>
-            <div className="flex justify-between"><span className="text-[#5f6368]">Auto snapshot</span><span>{tg.autoSnapshot ? `On · ${tg.snapshotIntervalMinutes} min` : "Off"}</span></div>
+        <Card title="☁️ Telegram cloud" icon={<DatabaseBackup size={16} className="text-[#81c995]" />}>
+          <div className="space-y-2 text-[13px] text-[#e8eaed]">
+            <div className="flex justify-between"><span className="text-[#9aa0a6]">Configured</span><span>{tg.configured ? "✅" : "❌"}</span></div>
+            <div className="flex justify-between"><span className="text-[#9aa0a6]">Bot token set</span><span>{tg.botTokenSet ? "✅" : "❌"}</span></div>
+            <div className="flex justify-between"><span className="text-[#9aa0a6]">Storage channel set</span><span>{tg.storageChatIdSet ? "✅" : "❌"}</span></div>
+            <div className="flex justify-between"><span className="text-[#9aa0a6]">Bot running</span><span>{tg.botRunning ? "✅" : "❌"}</span></div>
+            <div className="flex justify-between"><span className="text-[#9aa0a6]">Auto restore</span><span>{tg.autoRestore ? "On" : "Off"}</span></div>
+            <div className="flex justify-between"><span className="text-[#9aa0a6]">Auto snapshot</span><span>{tg.autoSnapshot ? `On · ${tg.snapshotIntervalMinutes} min` : "Off"}</span></div>
           </div>
         </Card>
 
-        <Card title="🔐 Admin" icon={<Lock size={16} className="text-[#b06000]" />}>
-          <div className="text-[13px] text-[#1f1f1f] leading-relaxed">
+        <Card title="🔐 Admin" icon={<Lock size={16} className="text-[#fdd663]" />}>
+          <div className="text-[13px] text-[#e8eaed] leading-relaxed">
             {settings?.adminPasswordRequired ? (
               <>
-                <div className="flex items-center gap-2 text-[#188038] font-medium"><CheckCircle2 size={15} /> Admin password is ON</div>
-                <div className="mt-1.5 text-xs text-[#5f6368]">
+                <div className="flex items-center gap-2 text-[#81c995] font-medium"><CheckCircle2 size={15} /> Admin password is ON</div>
+                <div className="mt-1.5 text-xs text-[#9aa0a6]">
                   Training, Users, Datasets deletion and other write actions require the password. Token: {authStatus.adminAuthed ? "unlocked 🔓" : "locked 🔒"}.
                 </div>
               </>
             ) : (
               <>
-                <div className="flex items-center gap-2 font-medium"><CircleAlert size={15} className="text-[#b06000]" /> Admin password is OFF</div>
-                <div className="mt-1.5 text-xs text-[#5f6368]">
-                  Single-user panel — every action is open. Set <code className="bg-[#f0f4f9] px-1 rounded">ADMIN_PASSWORD</code> to lock training &amp; write actions.
+                <div className="flex items-center gap-2 font-medium"><CircleAlert size={15} className="text-[#fdd663]" /> Admin password is OFF</div>
+                <div className="mt-1.5 text-xs text-[#9aa0a6]">
+                  Single-user panel — every action is open. Set <code className="bg-[#1e1f20] px-1 rounded">ADMIN_PASSWORD</code> to lock training &amp; write actions.
                 </div>
               </>
             )}
           </div>
         </Card>
 
-        <Card title="🖥️ Runtime" icon={<Settings size={16} className="text-[#5f6368]" />} className="md:col-span-2">
-          <div className="space-y-1.5 text-xs text-[#5f6368]">
-            <div>Database: <span className="font-mono text-[#1f1f1f] break-all">{settings?.database ?? "…"}</span></div>
-            <div>Port: <span className="text-[#1f1f1f]">{settings?.port ?? "…"}</span> · Cloud state: <span className="text-[#1f1f1f]">{settings?.cloudState ?? "…"}</span></div>
+        <Card title="🖥️ Runtime" icon={<Settings size={16} className="text-[#9aa0a6]" />} className="md:col-span-2">
+          <div className="space-y-1.5 text-xs text-[#9aa0a6]">
+            <div>Database: <span className="font-mono text-[#e8eaed] break-all">{settings?.database ?? "…"}</span></div>
+            <div>Port: <span className="text-[#e8eaed]">{settings?.port ?? "…"}</span> · Cloud state: <span className="text-[#e8eaed]">{settings?.cloudState ?? "…"}</span></div>
             <div>All values come from environment variables — change them in Render's dashboard (env vars) or <span className="font-mono">.env</span>, then redeploy.</div>
           </div>
         </Card>
@@ -2017,29 +2223,29 @@ export default function App() {
 
   const renderLogs = () => {
     const levelCls: Record<string, string> = {
-      error: "text-[#c5221f]",
-      warn: "text-[#b06000]",
-      info: "text-[#188038]",
-      debug: "text-[#5f6368]",
+      error: "text-[#f28b82]",
+      warn: "text-[#fdd663]",
+      info: "text-[#81c995]",
+      debug: "text-[#9aa0a6]",
     };
     return (
       <Card
         title="Recent activity"
-        icon={<Terminal size={16} className="text-[#1a73e8]" />}
+        icon={<Terminal size={16} className="text-[#8ab4f8]" />}
         right={
-          <button onClick={() => loadPageData("logs")} className="px-3 py-1.5 bg-[#f0f4f9] hover:bg-[#e9eef6] text-[#444746] rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5">
+          <button onClick={() => loadPageData("logs")} className="px-3 py-1.5 bg-[#1e1f20] hover:bg-[#282a2c] text-[#3c4043] rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5">
             <RefreshCw size={13} /> Refresh
           </button>
         }
       >
         <div className="space-y-1 max-h-[70vh] overflow-y-auto font-mono text-[11px]">
-          {logs.length === 0 && <div className="text-[#5f6368] p-4 text-center">No activity yet.</div>}
+          {logs.length === 0 && <div className="text-[#9aa0a6] p-4 text-center">No activity yet.</div>}
           {logs.map((l) => (
-            <div key={l.id} className="flex gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[#f8f9fa] break-all">
-              <span className="shrink-0 text-[#5f6368]">{new Date(l.at).toLocaleTimeString()}</span>
+            <div key={l.id} className="flex gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[#282a2c] break-all">
+              <span className="shrink-0 text-[#9aa0a6]">{new Date(l.at).toLocaleTimeString()}</span>
               <span className={`shrink-0 uppercase w-11 ${levelCls[l.level] ?? ""}`}>{l.level}</span>
-              <span className="shrink-0 text-[#1a73e8]">{l.source}</span>
-              <span className="text-[#1f1f1f]">{l.message}</span>
+              <span className="shrink-0 text-[#8ab4f8]">{l.source}</span>
+              <span className="text-[#e8eaed]">{l.message}</span>
             </div>
           ))}
         </div>
@@ -2057,7 +2263,7 @@ export default function App() {
               Hello, {userName || "there"}
             </span>
           </div>
-          <div className="mt-1 text-[#5f6368] text-lg">How can I help you today?</div>
+          <div className="mt-1 text-[#9aa0a6] text-lg">How can I help you today?</div>
         </div>
       )}
       <ChatView
@@ -2086,21 +2292,21 @@ export default function App() {
     tab === "chat" ? "MY-AI" : NAV_SECTIONS.find((n) => n.name === tab)?.label ?? "MY-AI";
 
   return (
-    <div className="flex h-screen w-full bg-white text-[#1f1f1f] overflow-hidden">
+    <div className="flex h-screen w-full bg-[#131314] text-[#e8eaed] overflow-hidden">
       {/* Mobile overlay */}
       {sidebarOpen && <div className="fixed inset-0 bg-black/40 z-30 md:hidden" onClick={() => setSidebarOpen(false)} />}
 
       {/* Sidebar — Gemini style */}
       <aside
-        className={`drawer fixed inset-y-0 left-0 z-40 w-[280px] bg-[#f0f4f9] flex flex-col md:static md:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}
+        className={`drawer fixed inset-y-0 left-0 z-40 w-[280px] bg-[#1e1f20] flex flex-col md:static md:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}
       >
         <div className="p-4 pb-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 px-1">
               <Sparkle size={22} />
-              <span className="text-[18px] font-medium tracking-tight text-[#1f1f1f]">MY<span className="text-[#4E7DF5]">-AI</span></span>
+              <span className="text-[18px] font-medium tracking-tight text-[#e8eaed]">MY<span className="text-[#4E7DF5]">-AI</span></span>
             </div>
-            <button className="md:hidden p-1.5 text-[#444746] hover:bg-[#e9eef6] rounded-full" onClick={() => setSidebarOpen(false)}>
+            <button className="md:hidden p-1.5 text-[#3c4043] hover:bg-[#282a2c] rounded-full" onClick={() => setSidebarOpen(false)}>
               <X size={18} />
             </button>
           </div>
@@ -2112,7 +2318,7 @@ export default function App() {
               selectTab("chat");
             }}
             title="New chat (⌘/Ctrl + Shift + O)"
-            className="mt-4 w-full flex items-center gap-2.5 bg-[#d3e3fd] hover:bg-[#c2d8fb] text-[#041e49] rounded-full px-4 py-2.5 text-[14px] font-medium transition-colors"
+            className="mt-4 w-full flex items-center gap-2.5 bg-[#394457] hover:bg-[#3c4a63] text-[#394457] rounded-full px-4 py-2.5 text-[14px] font-medium transition-colors"
           >
             <Plus size={18} strokeWidth={2.5} />
             New chat
@@ -2122,34 +2328,34 @@ export default function App() {
           <button
             onClick={() => setSearchOpen(true)}
             title="Search chat history (⌘/Ctrl + K)"
-            className="mt-2 w-full flex items-center gap-2.5 text-[#444746] hover:bg-[#e9eef6] rounded-full px-4 py-2 text-[13px] transition-colors"
+            className="mt-2 w-full flex items-center gap-2.5 text-[#3c4043] hover:bg-[#282a2c] rounded-full px-4 py-2 text-[13px] transition-colors"
           >
             <Search size={16} />
             <span className="flex-1 text-left">Search chats</span>
-            <kbd className="text-[10px] text-[#5f6368] bg-white/70 border border-[#dadce0] rounded px-1.5 py-0.5">⌘K</kbd>
+            <kbd className="text-[10px] text-[#9aa0a6] bg-[#282a2c] border border-[#3c4043] rounded px-1.5 py-0.5">⌘K</kbd>
           </button>
         </div>
 
         {/* Recent chats */}
         <div className="flex-1 overflow-y-auto px-4 py-3">
           <div className="flex items-center justify-between px-3 mb-1">
-            <span className="text-[12px] font-medium text-[#5f6368]">Recent</span>
+            <span className="text-[12px] font-medium text-[#9aa0a6]">Recent</span>
             {sessions.length > 0 && (
               <button
                 onClick={() => setConfirmClear(true)}
                 title="Delete all chats"
-                className="text-[11px] text-[#5f6368] hover:text-[#c5221f] transition-colors"
+                className="text-[11px] text-[#9aa0a6] hover:text-[#f28b82] transition-colors"
               >
                 Clear all
               </button>
             )}
           </div>
-          {sessions.length === 0 && <div className="text-[12px] text-[#5f6368] px-3 py-2">No chats yet</div>}
+          {sessions.length === 0 && <div className="text-[12px] text-[#9aa0a6] px-3 py-2">No chats yet</div>}
           {sessions.map((s) => (
             <div
               key={s.id}
               className={`group flex items-center gap-1 rounded-full px-3 py-2 mb-0.5 cursor-pointer transition-colors ${
-                tab === "chat" && activeId === s.id ? "bg-[#d3e3fd] text-[#041e49]" : "text-[#444746] hover:bg-[#e9eef6]"
+                tab === "chat" && activeId === s.id ? "bg-[#394457] text-[#394457]" : "text-[#3c4043] hover:bg-[#282a2c]"
               }`}
               onClick={() => {
                 if (renamingId === s.id) return;
@@ -2179,13 +2385,13 @@ export default function App() {
                     }
                     if (e.key === "Escape") setRenamingId(null);
                   }}
-                  className="flex-1 min-w-0 bg-white border border-[#d2e3fc] rounded-full px-2.5 py-1 text-[13px] outline-none"
+                  className="flex-1 min-w-0 bg-[#1e1f20] border border-[#243a5c] rounded-full px-2.5 py-1 text-[13px] outline-none"
                 />
               ) : (
                 <>
                   <span className="flex-1 text-[13px] truncate">{s.title || `Chat #${s.id}`}</span>
                   {typeof s.messageCount === "number" && s.messageCount > 0 && (
-                    <span className="opacity-0 group-hover:opacity-0 text-[10px] text-[#5f6368]">{s.messageCount}</span>
+                    <span className="opacity-0 group-hover:opacity-0 text-[10px] text-[#9aa0a6]">{s.messageCount}</span>
                   )}
                   <button
                     onClick={(e) => {
@@ -2193,7 +2399,7 @@ export default function App() {
                       setRenamingId(s.id);
                       setRenameDraft(s.title || "");
                     }}
-                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#d3e3fd] rounded-full transition-opacity"
+                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#394457] rounded-full transition-opacity"
                     title="Rename chat (double-click)"
                   >
                     <Pencil size={12} />
@@ -2203,7 +2409,7 @@ export default function App() {
                       e.stopPropagation();
                       if (confirm("Delete this chat and all its messages?")) deleteChat(s.id);
                     }}
-                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#d3e3fd] rounded-full transition-opacity"
+                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#394457] rounded-full transition-opacity"
                     title="Delete chat"
                   >
                     <Trash2 size={13} />
@@ -2214,13 +2420,13 @@ export default function App() {
           ))}
 
           {/* Sections */}
-          <div className="text-[12px] font-medium text-[#5f6368] px-3 mt-5 mb-1">Manage</div>
+          <div className="text-[12px] font-medium text-[#9aa0a6] px-3 mt-5 mb-1">Manage</div>
           {NAV_SECTIONS.map((n) => (
             <button
               key={n.name}
               onClick={() => selectTab(n.name)}
               className={`w-full flex items-center gap-3 rounded-full px-3 py-2 mb-0.5 text-[13px] transition-colors ${
-                tab === n.name ? "bg-[#d3e3fd] text-[#041e49]" : "text-[#444746] hover:bg-[#e9eef6]"
+                tab === n.name ? "bg-[#394457] text-[#394457]" : "text-[#3c4043] hover:bg-[#282a2c]"
               }`}
             >
               {n.icon}
@@ -2230,9 +2436,9 @@ export default function App() {
         </div>
 
         {/* Status footer */}
-        <div className="p-4 border-t border-[#e3e3e3]">
-          <div className="flex items-center gap-2 text-[12px] text-[#5f6368]">
-            <span className={`w-2 h-2 rounded-full ${health.status === "Operational" ? "bg-[#188038]" : "bg-[#b06000]"}`} />
+        <div className="p-4 border-t border-[#3c4043]">
+          <div className="flex items-center gap-2 text-[12px] text-[#9aa0a6]">
+            <span className={`w-2 h-2 rounded-full ${health.status === "Operational" ? "bg-[#81c995]" : "bg-[#fdd663]"}`} />
             {health.status === "Operational" ? "System operational" : "System " + String(health.status).toLowerCase()}
           </div>
         </div>
@@ -2240,34 +2446,34 @@ export default function App() {
 
       {/* Main */}
       <main className="flex-1 flex flex-col min-w-0">
-        <header className="h-14 shrink-0 px-3 md:px-5 border-b border-[#e3e3e3] flex items-center justify-between bg-white/90 backdrop-blur">
+        <header className="h-14 shrink-0 px-3 md:px-5 border-b border-[#3c4043] flex items-center justify-between bg-[#131314]/90 backdrop-blur">
           <div className="flex items-center gap-2 min-w-0">
-            <button className="md:hidden p-2 -ml-1 text-[#444746] hover:bg-[#f0f4f9] rounded-full" onClick={() => setSidebarOpen(true)}>
+            <button className="md:hidden p-2 -ml-1 text-[#3c4043] hover:bg-[#1e1f20] rounded-full" onClick={() => setSidebarOpen(true)}>
               <Menu size={20} />
             </button>
-            <h1 className="text-[16px] font-medium text-[#1f1f1f] truncate">{tabTitle}</h1>
+            <h1 className="text-[16px] font-medium text-[#e8eaed] truncate">{tabTitle}</h1>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => setSearchOpen(true)}
               title="Search chats (⌘/Ctrl + K)"
-              className="p-2 text-[#444746] hover:bg-[#f0f4f9] rounded-full transition-colors"
+              className="p-2 text-[#3c4043] hover:bg-[#1e1f20] rounded-full transition-colors"
             >
               <Search size={17} />
             </button>
             <button
               onClick={() => setShortcutsOpen(true)}
               title="Keyboard shortcuts (⌘/Ctrl + /)"
-              className="hidden sm:inline-flex p-2 text-[#444746] hover:bg-[#f0f4f9] rounded-full transition-colors"
+              className="hidden sm:inline-flex p-2 text-[#3c4043] hover:bg-[#1e1f20] rounded-full transition-colors"
             >
               <Keyboard size={17} />
             </button>
             {authStatus.passwordRequired && (
-              <span className="hidden sm:inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-[#f0f4f9] text-[#5f6368]">
+              <span className="hidden sm:inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-[#1e1f20] text-[#9aa0a6]">
                 <Lock size={11} /> {authStatus.adminAuthed ? "Admin unlocked" : "Admin locked"}
               </span>
             )}
-            <span className="hidden sm:inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-[#e6f4ea] text-[#188038]">
+            <span className="hidden sm:inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-[#173f2a] text-[#81c995]">
               <ShieldCheck size={11} /> Admin Mode
             </span>
             <div className="w-8 h-8 rounded-full bg-[#4E7DF5] text-white flex items-center justify-center text-sm font-medium">
@@ -2294,12 +2500,12 @@ export default function App() {
       {/* Admin password modal */}
       {passwordModal && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setPasswordModal(false)}>
-          <div className="bg-white rounded-3xl border border-[#e3e3e3] p-6 w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-[#1e1f20] rounded-3xl border border-[#3c4043] p-6 w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2 mb-1">
-              <Lock size={18} className="text-[#b06000]" />
+              <Lock size={18} className="text-[#fdd663]" />
               <div className="text-[15px] font-medium">Admin password</div>
             </div>
-            <p className="text-[13px] text-[#5f6368] mb-4">Training ও write actions চালু করতে ADMIN_PASSWORD দিন।</p>
+            <p className="text-[13px] text-[#9aa0a6] mb-4">Training ও write actions চালু করতে ADMIN_PASSWORD দিন।</p>
             <input
               type="password"
               value={pwValue}
@@ -2307,14 +2513,14 @@ export default function App() {
               onKeyDown={(e) => e.key === "Enter" && verifyPassword()}
               placeholder="Password"
               autoFocus
-              className="w-full bg-[#f0f4f9] border border-transparent focus:border-[#d2e3fc] rounded-xl px-3 py-2.5 text-sm outline-none mb-2"
+              className="w-full bg-[#282a2c] border border-[#3c4043] focus:border-[#8ab4f8] rounded-xl px-3 py-2.5 text-sm outline-none mb-2"
             />
-            {pwError && <div className="text-xs text-[#c5221f] mb-2">{pwError}</div>}
+            {pwError && <div className="text-xs text-[#f28b82] mb-2">{pwError}</div>}
             <div className="flex gap-2">
-              <button onClick={() => setPasswordModal(false)} className="flex-1 py-2.5 bg-[#f0f4f9] hover:bg-[#e9eef6] rounded-xl text-[13px] font-medium transition-colors">
+              <button onClick={() => setPasswordModal(false)} className="flex-1 py-2.5 bg-[#1e1f20] hover:bg-[#282a2c] rounded-xl text-[13px] font-medium transition-colors">
                 Cancel
               </button>
-              <button onClick={verifyPassword} className="flex-1 py-2.5 bg-[#1a73e8] hover:bg-[#1765cc] text-white rounded-xl text-[13px] font-medium transition-colors">
+              <button onClick={verifyPassword} className="flex-1 py-2.5 bg-[#1a73e8] hover:bg-[#2b7de2] text-white rounded-xl text-[13px] font-medium transition-colors">
                 Unlock
               </button>
             </div>
@@ -2325,9 +2531,9 @@ export default function App() {
       {/* Chat search palette — ⌘/Ctrl + K */}
       {searchOpen && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-4 pt-[12vh]" onClick={() => setSearchOpen(false)}>
-          <div className="bg-white rounded-3xl border border-[#e3e3e3] w-full max-w-lg shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center gap-2 px-4 py-3 border-b border-[#e3e3e3]">
-              <Search size={17} className="text-[#5f6368] shrink-0" />
+          <div className="bg-[#1e1f20] rounded-3xl border border-[#3c4043] w-full max-w-lg shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-[#3c4043]">
+              <Search size={17} className="text-[#9aa0a6] shrink-0" />
               <input
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -2336,13 +2542,13 @@ export default function App() {
                 }}
                 placeholder="চ্যাট বা মেসেজ খুঁজুন… (title + message text)"
                 autoFocus
-                className="flex-1 bg-transparent outline-none text-[15px] placeholder-[#80868b]"
+                className="flex-1 bg-transparent outline-none text-[15px] placeholder-[#6b7075]"
               />
-              <kbd className="text-[10px] text-[#5f6368] bg-[#f0f4f9] border border-[#dadce0] rounded px-1.5 py-0.5">Esc</kbd>
+              <kbd className="text-[10px] text-[#9aa0a6] bg-[#1e1f20] border border-[#3c4043] rounded px-1.5 py-0.5">Esc</kbd>
             </div>
             <div className="max-h-[52vh] overflow-y-auto p-2">
               {searchResults.length === 0 && (
-                <div className="px-3 py-6 text-center text-[13px] text-[#5f6368]">
+                <div className="px-3 py-6 text-center text-[13px] text-[#9aa0a6]">
                   {searchQuery ? "কিছু পাওয়া যায়নি" : "টাইপ করুন — সব চ্যাট ও মেসেজে খোঁজা হবে"}
                 </div>
               )}
@@ -2350,21 +2556,21 @@ export default function App() {
                 <button
                   key={s.id}
                   onClick={() => openChat(s.id)}
-                  className="w-full text-left px-3 py-2.5 rounded-2xl hover:bg-[#f0f4f9] transition-colors flex items-start gap-3"
+                  className="w-full text-left px-3 py-2.5 rounded-2xl hover:bg-[#1e1f20] transition-colors flex items-start gap-3"
                 >
-                  <MessageSquare size={15} className="mt-0.5 text-[#5f6368] shrink-0" />
+                  <MessageSquare size={15} className="mt-0.5 text-[#9aa0a6] shrink-0" />
                   <div className="min-w-0 flex-1">
                     <div className="text-[13px] font-medium truncate">{s.title || `Chat #${s.id}`}</div>
-                    {s.preview && <div className="text-[12px] text-[#5f6368] truncate">{s.preview}</div>}
+                    {s.preview && <div className="text-[12px] text-[#9aa0a6] truncate">{s.preview}</div>}
                   </div>
-                  <span className="text-[11px] text-[#5f6368] shrink-0">{s.messageCount ?? 0} msg</span>
+                  <span className="text-[11px] text-[#9aa0a6] shrink-0">{s.messageCount ?? 0} msg</span>
                 </button>
               ))}
             </div>
-            <div className="px-4 py-2 border-t border-[#e3e3e3] text-[11px] text-[#5f6368] flex items-center gap-3">
+            <div className="px-4 py-2 border-t border-[#3c4043] text-[11px] text-[#9aa0a6] flex items-center gap-3">
               <span>↵ প্রথমটি খুলুন</span>
               <span>·</span>
-              <button onClick={() => { setSearchOpen(false); setShortcutsOpen(true); }} className="hover:text-[#1a73e8]">
+              <button onClick={() => { setSearchOpen(false); setShortcutsOpen(true); }} className="hover:text-[#8ab4f8]">
                 সব shortcut দেখুন (⌘/)
               </button>
             </div>
@@ -2375,9 +2581,9 @@ export default function App() {
       {/* Keyboard shortcut cheat sheet — ⌘/Ctrl + / */}
       {shortcutsOpen && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setShortcutsOpen(false)}>
-          <div className="bg-white rounded-3xl border border-[#e3e3e3] p-6 w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-[#1e1f20] rounded-3xl border border-[#3c4043] p-6 w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2 mb-4">
-              <Keyboard size={18} className="text-[#1a73e8]" />
+              <Keyboard size={18} className="text-[#8ab4f8]" />
               <div className="text-[15px] font-medium">Chat shortcuts</div>
             </div>
             <div className="space-y-1.5">
@@ -2392,15 +2598,15 @@ export default function App() {
                 ["Esc", "Edit, search বা modal বন্ধ"],
                 ["Double-click on a chat", "Rename"],
               ].map(([k, d]) => (
-                <div key={k} className="flex items-center justify-between gap-3 py-1.5 border-b border-[#f1f3f4] last:border-0">
-                  <span className="text-[13px] text-[#444746]">{d}</span>
-                  <kbd className="text-[11px] text-[#1f1f1f] bg-[#f0f4f9] border border-[#dadce0] rounded-lg px-2 py-1 whitespace-nowrap">{k}</kbd>
+                <div key={k} className="flex items-center justify-between gap-3 py-1.5 border-b border-[#3c4043] last:border-0">
+                  <span className="text-[13px] text-[#3c4043]">{d}</span>
+                  <kbd className="text-[11px] text-[#e8eaed] bg-[#1e1f20] border border-[#3c4043] rounded-lg px-2 py-1 whitespace-nowrap">{k}</kbd>
                 </div>
               ))}
             </div>
             <button
               onClick={() => setShortcutsOpen(false)}
-              className="mt-5 w-full py-2.5 bg-[#f0f4f9] hover:bg-[#e9eef6] rounded-xl text-[13px] font-medium transition-colors"
+              className="mt-5 w-full py-2.5 bg-[#1e1f20] hover:bg-[#282a2c] rounded-xl text-[13px] font-medium transition-colors"
             >
               বন্ধ করুন
             </button>
@@ -2411,16 +2617,16 @@ export default function App() {
       {/* Clear-all-history confirmation */}
       {confirmClear && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setConfirmClear(false)}>
-          <div className="bg-white rounded-3xl border border-[#e3e3e3] p-6 w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-[#1e1f20] rounded-3xl border border-[#3c4043] p-6 w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2 mb-1">
-              <Trash2 size={18} className="text-[#c5221f]" />
+              <Trash2 size={18} className="text-[#f28b82]" />
               <div className="text-[15px] font-medium">Delete all chats?</div>
             </div>
-            <p className="text-[13px] text-[#5f6368] mb-4">
+            <p className="text-[13px] text-[#9aa0a6] mb-4">
               সব চ্যাট ও মেসেজ মুছে যাবে। আপনার Knowledge, Memory আর trained model অক্ষত থাকবে।
             </p>
             <div className="flex gap-2">
-              <button onClick={() => setConfirmClear(false)} className="flex-1 py-2.5 bg-[#f0f4f9] hover:bg-[#e9eef6] rounded-xl text-[13px] font-medium transition-colors">
+              <button onClick={() => setConfirmClear(false)} className="flex-1 py-2.5 bg-[#1e1f20] hover:bg-[#282a2c] rounded-xl text-[13px] font-medium transition-colors">
                 Cancel
               </button>
               <button
@@ -2428,7 +2634,7 @@ export default function App() {
                   setConfirmClear(false);
                   void clearAllChats();
                 }}
-                className="flex-1 py-2.5 bg-[#c5221f] hover:bg-[#a50e0e] text-white rounded-xl text-[13px] font-medium transition-colors"
+                className="flex-1 py-2.5 bg-[#d93025] hover:bg-[#e0453a] text-white rounded-xl text-[13px] font-medium transition-colors"
               >
                 Delete all
               </button>
@@ -2439,7 +2645,7 @@ export default function App() {
 
       {/* Toast */}
       {toast && (
-        <div className="toast-in fixed bottom-6 left-1/2 z-50 bg-[#1f1f1f] text-white text-[13px] px-4 py-2.5 rounded-full shadow-lg max-w-[90vw] truncate">
+        <div className="toast-in fixed bottom-6 left-1/2 z-50 bg-[#e8eaed] text-[#131314] text-[13px] px-4 py-2.5 rounded-full shadow-lg max-w-[90vw] truncate">
           {toast}
         </div>
       )}

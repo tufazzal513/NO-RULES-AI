@@ -846,15 +846,23 @@ app.post("/api/v1/ai/train", (req, res) => {
   if (blockWhileRestoring(req, res)) return;
   if (!requireAdmin(req, res)) return;
   try {
-    const stats = ai.train();
-    // The trained model lives in `ai_model` — mirror it so it is never lost.
-    try {
-      const row = db.prepare("SELECT key, value, updated_at FROM ai_model WHERE key = 'markov'").get() as any;
-      if (row) tryMirror("ai_model", "markov", { key: row.key, value: row.value, updated_at: row.updated_at });
-    } catch {
-      /* best-effort */
-    }
-    res.json({ success: true, message: "Model trained on your messages.", stats });
+    // Kick the training off asynchronously so the Training page can watch the
+    // progress bar and phase log fill in live.
+    setTimeout(() => {
+      try {
+        ai.runTrain("manual");
+        // The trained model lives in `ai_model` — mirror it so it is never lost.
+        try {
+          const row = db.prepare("SELECT key, value, updated_at FROM ai_model WHERE key = 'markov'").get() as any;
+          if (row) tryMirror("ai_model", "markov", { key: row.key, value: row.value, updated_at: row.updated_at });
+        } catch {
+          /* best-effort */
+        }
+      } catch (err: any) {
+        console.error("Manual train failed:", err?.message || err);
+      }
+    }, 60);
+    res.json({ success: true, started: true, message: "Background training started." });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -863,6 +871,15 @@ app.post("/api/v1/ai/train", (req, res) => {
 app.get("/api/v1/ai/status", (req, res) => {
   try {
     res.json(ai.status());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** Background-training journal — how the AI trains itself in the background. */
+app.get("/api/v1/ai/training", (req, res) => {
+  try {
+    res.json(ai.getTraining());
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -887,7 +904,7 @@ app.post("/api/v1/knowledge", (req, res) => {
   try {
     const info = db.prepare("INSERT INTO knowledge (title, content) VALUES (?, ?)").run(title || "Untitled", content.trim());
     tryMirror("knowledge", info.lastInsertRowid, { id: info.lastInsertRowid, title: title || "Untitled", content: content.trim() });
-    ai.scheduleTrain(2000);
+    ai.scheduleTrain(2000, "knowledge");
     res.json({ success: true, id: Number(info.lastInsertRowid) });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -917,7 +934,7 @@ app.post("/api/v1/ingest", (req, res) => {
       const msgs = db.prepare("SELECT * FROM chat_messages WHERE session_id = ?").all(applied.conversationId) as any[];
       for (const m of msgs) tryMirror("chat_messages", m.id, m);
     }
-    ai.scheduleTrain(800);
+    ai.scheduleTrain(800, "ingest");
     pushLog("info", "system", `Ingested ${applied.knowledgeInserted} docs, ${applied.pairsInserted} Q/A pairs (${applied.bytes} bytes) — background train scheduled`);
     res.json({ ok: true, ...applied, chunksPlanned: plan.chunks.length, skippedEmpty: plan.skippedEmpty });
   } catch (err: any) {
@@ -1212,7 +1229,7 @@ async function startServer() {
   try {
     const seeded = applyBuiltInSeed(db);
     if (!seeded.skipped) {
-      ai.train();
+      ai.runTrain("startup");
       pushLog(
         "info",
         "system",

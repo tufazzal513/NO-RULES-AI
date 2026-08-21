@@ -18,6 +18,7 @@
  */
 
 import { MarkovModel } from "./markov.ts";
+import { pushLog } from "../logs.ts";
 import { BM25, meaningfulTerms, type KnowledgeDoc } from "./retrieval.ts";
 import { detectIntent, tryEvaluateMath } from "./intents.ts";
 import { detectLanguage, languageVariants, normalizeForMatch, t, type Lang } from "./language.ts";
@@ -60,6 +61,44 @@ export interface EngineStatus {
   vocabSize: number;
 }
 
+/**
+ * Background-training journal — every automatic retrain is recorded here so
+ * the control panel can show exactly how the AI trains itself in the
+ * background: what triggered it, which phase it is in, and what it produced.
+ */
+export interface TrainPhase {
+  name: string;
+  detail?: string;
+  at: string;
+}
+
+export interface TrainRun {
+  id: number;
+  trigger: string;
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
+  ok: boolean;
+  error?: string;
+  phases: TrainPhase[];
+  result?: {
+    trainedMessages: number;
+    modelChains: number;
+    vocabSize: number;
+  };
+}
+
+export interface TrainingStatus {
+  running: boolean;
+  scheduled: boolean;
+  scheduledInMs: number | null;
+  phase: string | null;
+  progress: number;
+  currentRun: TrainRun | null;
+  lastRun: TrainRun | null;
+  runs: TrainRun[];
+}
+
 /** Optional hooks so the server can mirror AI-side writes to Telegram. */
 export interface AIEngineHooks {
   onMemoryChange?: (row: { id?: number; key: string; value: string }) => void;
@@ -71,6 +110,15 @@ export class AIEngine {
   private markov = new MarkovModel();
   private hooks: AIEngineHooks;
   private research: ResearchService | null = null;
+
+  // Background-training journal (visible in the control panel's Training page).
+  private runSeq = 0;
+  private runs: TrainRun[] = [];
+  private currentRun: TrainRun | null = null;
+  private currentPhase: string | null = null;
+  private currentProgress = 0;
+  private scheduled: boolean = false;
+  private scheduledInMs: number | null = null;
 
   constructor(db: any, hooks: AIEngineHooks = {}, research: ResearchService | null = null) {
     this.db = db;
@@ -486,31 +534,149 @@ export class AIEngine {
     return this.reply(input);
   }
 
-  train(): EngineStatus & { trainedMessages: number } {
+  /**
+   * Train the small Markov brain. Optionally reports progress so the control
+   * panel can show each phase of a (background) training run.
+   */
+  train(onProgress?: (progress: number, phase: string, detail: string) => void): EngineStatus & { trainedMessages: number } {
+    const report = (progress: number, phase: string, detail: string) => onProgress?.(progress, phase, detail);
+
+    report(0, "collecting", "Reading the training corpus…");
     const rows = this.db
       .prepare("SELECT content FROM chat_messages WHERE role IN ('user', 'ai') ORDER BY id ASC")
       .all() as { content: string }[];
     const docs = this.db.prepare("SELECT content FROM knowledge ORDER BY id ASC").all() as { content: string }[];
+
+    report(5, "preparing", `Corpus: ${rows.length} messages + ${docs.length} knowledge docs`);
     this.markov.reset();
-    for (const r of rows) this.markov.train(r.content);
+
+    // Learn n-gram chains from chat messages (the bulk of the work).
+    let i = 0;
+    for (const r of rows) {
+      this.markov.train(r.content);
+      i++;
+      if (i % 50 === 0 || i === rows.length) {
+        report(5 + Math.round((i / Math.max(1, rows.length)) * 65), "learning", `Learned chains from ${i}/${rows.length} messages`);
+      }
+    }
     // Language corpora / dumped notes also shape the small brain.
-    for (const d of docs) this.markov.train(d.content.slice(0, 4000));
+    let j = 0;
+    for (const d of docs) {
+      this.markov.train(d.content.slice(0, 4000));
+      j++;
+      if (j % 50 === 0 || j === docs.length) {
+        report(70 + Math.round((j / Math.max(1, docs.length)) * 20), "learning", `Learned chains from ${j}/${docs.length} knowledge docs`);
+      }
+    }
+
+    report(92, "saving", "Persisting the trained model…");
     this.persist();
+    report(100, "done", "Model ready");
     return { ...this.status(), trainedMessages: rows.length + docs.length };
+  }
+
+  /** Record a phase on the in-flight run (throttled so the journal stays tidy). */
+  private recordPhase(name: string, detail?: string): void {
+    if (!this.currentRun) return;
+    const last = this.currentRun.phases[this.currentRun.phases.length - 1];
+    if (last && last.name === name && !detail) return;
+    this.currentRun.phases.push({ name, detail, at: new Date().toISOString() });
+  }
+
+  /**
+   * Run a full training pass and record it in the background-training journal.
+   * Every trigger (manual, ingest, chat, knowledge, startup…) is logged so the
+   * Training page can show exactly how the AI keeps itself trained.
+   */
+  runTrain(trigger = "manual"): TrainRun {
+    const run: TrainRun = {
+      id: ++this.runSeq,
+      trigger,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      durationMs: null,
+      ok: false,
+      phases: [],
+    };
+    this.currentRun = run;
+    this.currentPhase = "starting";
+    this.currentProgress = 0;
+    this.recordPhase("starting", `Triggered by ${trigger}`);
+    pushLog("info", "training", `🏋️ Background training started (trigger: ${trigger})`);
+
+    const t0 = Date.now();
+    let lastLoggedProgress = -1;
+    let lastLoggedPhase = "";
+    try {
+      const result = this.train((progress, phase, detail) => {
+        this.currentProgress = progress;
+        // Log a step on every phase change and roughly every 8% of progress so
+        // the Training page shows the run filling in, without flooding it.
+        if (phase !== lastLoggedPhase || progress - lastLoggedProgress >= 8 || progress === 100) {
+          lastLoggedPhase = phase;
+          lastLoggedProgress = progress;
+          this.currentPhase = phase;
+          this.recordPhase(phase, detail);
+        }
+      });
+      run.ok = true;
+      run.result = {
+        trainedMessages: result.trainedMessages,
+        modelChains: result.modelChains,
+        vocabSize: result.vocabSize,
+      };
+    } catch (e: any) {
+      run.error = String(e?.message || e);
+      this.recordPhase("failed", run.error);
+      pushLog("error", "training", `Background training failed: ${run.error}`);
+    }
+
+    run.finishedAt = new Date().toISOString();
+    run.durationMs = Date.now() - t0;
+    this.currentRun = null;
+    this.currentPhase = null;
+    this.currentProgress = run.ok ? 100 : this.currentProgress;
+
+    this.runs.unshift(run);
+    if (this.runs.length > 30) this.runs.length = 30;
+
+    if (run.ok) {
+      pushLog(
+        "info",
+        "training",
+        `✅ Training done — ${run.result!.trainedMessages} messages → ${run.result!.modelChains} chains, ${run.result!.vocabSize} vocab (${run.durationMs}ms)`
+      );
+    }
+    return run;
+  }
+
+  /** Snapshot of the background-training journal for the control panel. */
+  getTraining(): TrainingStatus {
+    return {
+      running: !!this.currentRun,
+      scheduled: this.scheduled,
+      scheduledInMs: this.scheduledInMs,
+      phase: this.currentPhase,
+      progress: this.currentProgress,
+      currentRun: this.currentRun,
+      lastRun: this.runs[0] ?? null,
+      runs: this.runs.slice(0, 20),
+    };
   }
 
   private autoTrainTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Retrain in the background after ingest / chat — coalesces bursts of uploads. */
-  scheduleTrain(delayMs = 1500): void {
+  scheduleTrain(delayMs = 1500, trigger = "automatic"): void {
+    this.scheduled = true;
+    this.scheduledInMs = delayMs;
+    pushLog("info", "training", `⏳ Background training scheduled in ${delayMs}ms (trigger: ${trigger})`);
     if (this.autoTrainTimer) clearTimeout(this.autoTrainTimer);
     this.autoTrainTimer = setTimeout(() => {
       this.autoTrainTimer = null;
-      try {
-        this.train();
-      } catch (e) {
-        console.error("Background train failed:", (e as Error).message);
-      }
+      this.scheduled = false;
+      this.scheduledInMs = null;
+      this.runTrain(trigger);
     }, delayMs);
     this.autoTrainTimer.unref?.();
   }
