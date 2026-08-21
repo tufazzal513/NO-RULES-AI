@@ -952,6 +952,16 @@ app.get("/api/v1/research/status", (req, res) => {
   }
 });
 
+/** Probe every live source — used after deploy to see what actually works. */
+app.get("/api/v1/research/selftest", async (req, res) => {
+  try {
+    const report = await research.selftest();
+    res.json({ ok: true, ...report });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 /** Force an online lookup now (fresh cache answered instantly). */
 app.post("/api/v1/research", async (req, res) => {
   if (blockWhileRestoring(req, res)) return;

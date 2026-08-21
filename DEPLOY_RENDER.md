@@ -70,6 +70,16 @@ https://YOUR-SERVICE.onrender.com/api/v1/telegram/status
 
 Health endpoint-এ HTTP 200 এবং `"status":"Operational"` থাকা উচিত।
 
+### Research sources যাচাই (এক ক্লিক)
+
+Sandbox/CI থেকে DuckDuckGo/Wikipedia-এ পৌঁছানো যায় না, কিন্তু **deploy-এর পর** লাইভ সোর্স চেক করা যায়:
+
+```text
+https://YOUR-SERVICE.onrender.com/api/v1/research/selftest
+```
+
+অথবা কন্ট্রোল প্যানেলের **Research** ট্যাবে **Test all sources** চাপুন। প্রতিটি hostname-এর জন্য pass/fail, latency, sample answer ও confidence দেখাবে (English + বাংলা + Banglish query)। Circuit breaker এখনও per-host কাজ করে — একটা সোর্স ডাউন থাকলে বাকিগুলো পরীক্ষা চলতে থাকে।
+
 ## পদ্ধতি B: Manual Web Service
 
 Blueprint ব্যবহার না করলে:

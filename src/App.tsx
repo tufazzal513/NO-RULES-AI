@@ -937,6 +937,8 @@ export default function App() {
   const [researchResult, setResearchResult] = useState<any>(null);
   const [researchBusy, setResearchBusy] = useState(false);
   const [researchMsg, setResearchMsg] = useState("");
+  const [selftest, setSelftest] = useState<any>(null);
+  const [selftestBusy, setSelftestBusy] = useState(false);
 
   const fetchResearchStatus = async () => {
     try {
@@ -964,6 +966,20 @@ export default function App() {
     }
     setResearchBusy(false);
     setResearchMsg("");
+    fetchResearchStatus();
+  };
+
+  const runSelftest = async () => {
+    if (selftestBusy) return;
+    setSelftestBusy(true);
+    setResearchMsg("Testing every source…");
+    try {
+      setSelftest(await api("/api/v1/research/selftest"));
+      setResearchMsg("");
+    } catch (e: any) {
+      setResearchMsg(e.message);
+    }
+    setSelftestBusy(false);
     fetchResearchStatus();
   };
 
@@ -1373,13 +1389,23 @@ export default function App() {
           icon={<Globe size={16} className="text-[#1a73e8]" />}
           className="md:col-span-2"
           right={
-            <button onClick={() => resetResearch(false)} className="px-3 py-1.5 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-lg text-xs font-medium transition-colors flex items-center gap-1">
-              <RefreshCw size={12} /> Reset Cooldowns
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button onClick={runSelftest} disabled={selftestBusy} className="px-3 py-1.5 bg-[#1a73e8] hover:bg-[#1765cc] disabled:opacity-50 text-white rounded-lg text-xs font-medium transition-colors flex items-center gap-1">
+                {selftestBusy ? "…" : (<><CheckCircle2 size={12} /> Test all sources</>)}
+              </button>
+              <button onClick={() => resetResearch(false)} className="px-3 py-1.5 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-lg text-xs font-medium transition-colors flex items-center gap-1">
+                <RefreshCw size={12} /> Reset Cooldowns
+              </button>
+            </div>
           }
         >
           <div className="space-y-1.5 max-h-[380px] overflow-y-auto pr-1">
             {sources.length === 0 && <div className="text-[13px] text-[#5f6368] p-4 text-center">Loading source status…</div>}
+            {selftest?.sources && (
+              <div className="mb-2 p-2.5 bg-[#f8f9fa] border border-[#e3e3e3] rounded-xl text-[11px] text-[#5f6368]">
+                Self-test: {selftest.sources.filter((x: any) => x.pass).length} pass · {selftest.sources.filter((x: any) => !x.pass && !x.skipped).length} fail · {selftest.sources.filter((x: any) => x.skipped).length} skipped
+              </div>
+            )}
             {sources.map((s: any) => (
               <div key={`${s.name}-${s.host}`} className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl hover:bg-[#f8f9fa]">
                 <div className="min-w-0">
