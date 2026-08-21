@@ -31,8 +31,32 @@ OWNER_NAME     = ''     # আপনার নাম
 EXPORT_GGUF    = True
 
 # ─── লাইভ মনিটরিং: MY-AI কন্ট্রোল প্যানেলে progress দেখুন ────
+# প্যানেলের Training পেজে "Copy Kaggle cell" চাপলে ওই সেলে MYAI_*
+# এনভায়রনমেন্ট ভ্যারিয়েবলগুলো বসানো থাকে — নিচের লাইনগুলো সেই
+# মানগুলো নিয়ে নেয় (খালি থাকলে উপরের সেটিংসই থাকবে)।
 PANEL_URL      = ''   # যেমন: 'https://no-rules-ai.onrender.com'
 PANEL_TOKEN    = ''   # প্যানেলের ADMIN_PASSWORD (সেট করা থাকলে)
+
+# env-এ মান থাকলে সেগুলো প্রাধান্য পায় (প্যানেলের কপি-করা সেলে এভাবেই আসে)।
+PANEL_URL   = PANEL_URL   or os.environ.get('MYAI_PANEL_URL', '')
+PANEL_TOKEN = PANEL_TOKEN or os.environ.get('MYAI_ADMIN_TOKEN', '')
+PLAN        = os.environ.get('MYAI_PLAN')  or PLAN
+MODEL       = os.environ.get('MYAI_MODEL') or MODEL
+OWNER_NAME  = os.environ.get('MYAI_OWNER') or OWNER_NAME
+try:
+    HOURS = float(os.environ.get('MYAI_HOURS') or HOURS)
+    HOURS = int(HOURS) if HOURS == int(HOURS) else HOURS
+except (TypeError, ValueError):
+    pass
+try:
+    # Add-ons → Secrets-এ রাখা মানও পড়ে দেখা হয় (টোকেন গোপন রাখতে চাইলে)।
+    from kaggle_secrets import UserSecretsClient
+    _sec = UserSecretsClient()
+    PANEL_URL   = PANEL_URL   or str(_sec.get_secret('MYAI_PANEL_URL') or '')
+    PANEL_TOKEN = PANEL_TOKEN or str(_sec.get_secret('MYAI_ADMIN_TOKEN') or '')
+except Exception:
+    pass
+
 RUN_ID = os.environ.get('MYAI_RUN_ID') or f'kaggle-{int(__import__("time").time())}'
 
 OUTPUT_DIR = '/kaggle/working/my-ai-model'
