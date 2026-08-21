@@ -488,12 +488,31 @@ export class AIEngine {
 
   train(): EngineStatus & { trainedMessages: number } {
     const rows = this.db
-      .prepare("SELECT content FROM chat_messages WHERE role = 'user' ORDER BY id ASC")
+      .prepare("SELECT content FROM chat_messages WHERE role IN ('user', 'ai') ORDER BY id ASC")
       .all() as { content: string }[];
+    const docs = this.db.prepare("SELECT content FROM knowledge ORDER BY id ASC").all() as { content: string }[];
     this.markov.reset();
     for (const r of rows) this.markov.train(r.content);
+    // Language corpora / dumped notes also shape the small brain.
+    for (const d of docs) this.markov.train(d.content.slice(0, 4000));
     this.persist();
-    return { ...this.status(), trainedMessages: rows.length };
+    return { ...this.status(), trainedMessages: rows.length + docs.length };
+  }
+
+  private autoTrainTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Retrain in the background after ingest / chat — coalesces bursts of uploads. */
+  scheduleTrain(delayMs = 1500): void {
+    if (this.autoTrainTimer) clearTimeout(this.autoTrainTimer);
+    this.autoTrainTimer = setTimeout(() => {
+      this.autoTrainTimer = null;
+      try {
+        this.train();
+      } catch (e) {
+        console.error("Background train failed:", (e as Error).message);
+      }
+    }, delayMs);
+    this.autoTrainTimer.unref?.();
   }
 
   status(): EngineStatus {

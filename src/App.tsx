@@ -833,6 +833,8 @@ export default function App() {
   const [memKey, setMemKey] = useState("");
   const [memValue, setMemValue] = useState("");
   const [brainMsg, setBrainMsg] = useState("");
+  const ingestRef = useRef<HTMLInputElement>(null);
+  const [ingestBusy, setIngestBusy] = useState(false);
 
   const refreshBrain = async () => {
     try {
@@ -848,6 +850,34 @@ export default function App() {
       if (nameRow?.value) setUserName(String(nameRow.value).split(" ")[0]);
     } catch {
       /* ignore */
+    }
+  };
+
+  const ingestFiles = async (list: FileList | File[]) => {
+    const files = Array.from(list).slice(0, 40);
+    if (files.length === 0) return;
+    setIngestBusy(true);
+    setBrainMsg(`Importing ${files.length} file(s)…`);
+    try {
+      const payload = [];
+      for (const f of files) {
+        const content = await f.text();
+        payload.push({ name: f.name, content });
+      }
+      const d = await api("/api/v1/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files: payload }),
+      });
+      setBrainMsg(
+        `Imported ${d.knowledgeInserted} knowledge chunks + ${d.pairsInserted} Q/A pairs. Background train started ✨`
+      );
+      refreshBrain();
+      loadSessions();
+    } catch (e: any) {
+      setBrainMsg("Error: " + e.message);
+    } finally {
+      setIngestBusy(false);
     }
   };
 
@@ -1591,6 +1621,27 @@ export default function App() {
               </a>
             </div>
             {brainMsg && <div className="mt-3 text-xs text-[#1f1f1f] p-2.5 bg-[#f8f9fa] rounded-lg">{brainMsg}</div>}
+            <input
+              ref={ingestRef}
+              type="file"
+              multiple
+              accept=".txt,.md,.jsonl,.ndjson,.json,.csv,text/plain"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.length) void ingestFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
+            <button
+              onClick={() => ingestRef.current?.click()}
+              disabled={ingestBusy}
+              className="mt-2 w-full py-2.5 bg-[#f3e8fd] hover:bg-[#e9d5fb] disabled:opacity-50 text-[#7627bb] rounded-xl text-[13px] font-medium transition-colors flex items-center justify-center gap-1.5"
+            >
+              <Upload size={14} /> {ingestBusy ? "Importing…" : "Import .txt / .jsonl corpus (auto-train)"}
+            </button>
+            <p className="mt-2 text-[11px] text-[#5f6368] leading-snug">
+              Other-AI dumps, Bangla/English language files, or User:/AI: transcripts. Saved as knowledge; the small brain retrains in the background.
+            </p>
           </Card>
 
           <Card title="Knowledge 📚" icon={<BookMarked size={16} className="text-[#188038]" />}>
