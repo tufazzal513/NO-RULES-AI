@@ -49,6 +49,8 @@ export interface TelegramLike {
   downloadFile(fileId: string): Promise<Buffer>;
   findLatestSnapshot(): Promise<{ fileId: string; fileName: string; messageId: number } | null>;
   pinMessage(messageId: number): Promise<void>;
+  /** Optional second, durable pointer to the latest snapshot (channel description). */
+  setSnapshotPointer?(fileId: string, createdAt: string, records: number): Promise<void>;
 }
 
 export interface CloudSyncOptions {
@@ -60,6 +62,13 @@ export interface CloudSyncOptions {
   snapshotIntervalMinutes?: number;
   gzip?: boolean;
   logger?: Pick<Console, "log" | "warn" | "error">;
+  /**
+   * Called after every SUCCESSFUL restore, inside the same call.
+   * The server uses it to reload the AI model — without this the brain kept
+   * serving the pre-restore Markov chain and the restore looked like it had
+   * "not worked".
+   */
+  onRestored?: (restored: Record<string, number>) => void;
 }
 
 export interface SnapshotOutcome {
@@ -111,6 +120,7 @@ export class CloudSync {
   private snapshotRunning = false;
   private restoreRunning = false;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private onRestored?: (restored: Record<string, number>) => void;
 
   lastSnapshotAt: string | null = null;
   lastRestoreAt: string | null = null;
@@ -128,6 +138,12 @@ export class CloudSync {
     this.restoreOnEmptyOnly = opts.restoreOnEmptyOnly ?? true;
     this.snapshotIntervalMinutes = Math.max(1, Number(opts.snapshotIntervalMinutes) || 30);
     this.gzip = opts.gzip ?? true;
+    this.onRestored = opts.onRestored;
+  }
+
+  /** Register/replace the post-restore hook (the server wires `ai.reload`). */
+  setOnRestored(hook: (restored: Record<string, number>) => void): void {
+    this.onRestored = hook;
   }
 
   // -- state ----------------------------------------------------------------
@@ -231,6 +247,15 @@ export class CloudSync {
         this.log.warn("⚠️  Could not pin the snapshot message:", e.message);
       }
 
+      // Second, independent pointer (channel description). Pinning can be
+      // revoked or fail silently; without this a wiped container sometimes
+      // could not find its own backup — the "restore finds nothing" bug.
+      try {
+        await this.telegram.setSnapshotPointer?.(result.fileId, doc.meta.createdAt, doc.meta.totalRecords);
+      } catch (e: any) {
+        this.log.warn("⚠️  Could not update the channel snapshot pointer:", e.message);
+      }
+
       this.log.log(
         `📦 Snapshot uploaded to Telegram — ${doc.meta.totalRecords} records, checksum ${doc.meta.checksum.slice(0, 12)}…`
       );
@@ -305,8 +330,15 @@ export class CloudSync {
         }
       }
       if (!fileId) {
-        this.setState(previousState === "restoring" ? "ready" : previousState);
-        return { success: false, skipped: true, reason: "No snapshot found in the Telegram channel." };
+        this.setState(previousState === "restoring" || previousState === "starting" ? "ready" : previousState);
+        return {
+          success: false,
+          skipped: true,
+          reason:
+            "No snapshot found in the Telegram channel. Take a snapshot first " +
+            "(Telegram Cloud → Snapshot Now), or upload a snapshot file with " +
+            "Restore from file.",
+        };
       }
 
       this.log.log(`♻️  Downloading snapshot ${String(fileId).slice(0, 16)}… from Telegram`);
@@ -358,6 +390,14 @@ export class CloudSync {
       this.lastError = null;
       this.setState("ready");
 
+      // Reload anything that was cached in memory from the OLD database
+      // (the AI's Markov model above all) — otherwise the restore is invisible.
+      try {
+        this.onRestored?.(restored);
+      } catch (e: any) {
+        this.log.warn("⚠️  Post-restore reload hook failed:", e?.message || e);
+      }
+
       const summary = Object.entries(restored)
         .map(([t, n]) => `${t}=${n}`)
         .join(" ");
@@ -373,6 +413,91 @@ export class CloudSync {
     } finally {
       this.restoreRunning = false;
     }
+  }
+
+  /**
+   * Restore from a snapshot the user supplies directly (an uploaded
+   * `myai_snapshot_*.json` / `.json.gz`, or the parsed document).
+   *
+   * This is the escape hatch when Telegram itself is the problem — a wrong
+   * chat id, a bot that lost its admin rights, a deleted pin. The same
+   * validation and the same single transaction are used, so an invalid file
+   * can never damage the database.
+   */
+  async restoreFromBuffer(buffer: Buffer, opts: { force?: boolean } = {}): Promise<RestoreOutcome> {
+    if (this.snapshotRunning) {
+      return { success: false, skipped: true, reason: "A snapshot is running — restore refused." };
+    }
+    if (this.restoreRunning) {
+      return { success: false, skipped: true, reason: "A restore is already running." };
+    }
+
+    this.restoreRunning = true;
+    this.setState("restoring");
+    try {
+      let doc: SnapshotDocument;
+      try {
+        doc = parseSnapshotBuffer(buffer);
+      } catch (e: any) {
+        throw new Error(`Snapshot file could not be parsed: ${e.message}`);
+      }
+
+      const validation = validateSnapshot(doc);
+      if (!validation.valid) throw new Error(`Snapshot rejected — ${validation.reason}`);
+
+      const localEmpty = isDatabaseEmpty(this.db);
+      if (!localEmpty && coreRecordCount(doc) === 0 && !opts.force) {
+        this.setState("ready");
+        return {
+          success: false,
+          skipped: true,
+          reason: "That snapshot file is empty — refusing to wipe the current database.",
+        };
+      }
+
+      this.log.log(`♻️  Restoring uploaded snapshot — ${describeSnapshot(doc)}`);
+      const restored = importDump(this.db, doc);
+
+      setSyncState(this.db, LAST_RESTORE_CHECKSUM, doc.meta.checksum);
+      setSyncState(this.db, LAST_SNAPSHOT_CHECKSUM, coreChecksum(doc.data));
+      this.lastRestoreAt = new Date().toISOString();
+      this.lastError = null;
+      this.setState("ready");
+
+      try {
+        this.onRestored?.(restored);
+      } catch (e: any) {
+        this.log.warn("⚠️  Post-restore reload hook failed:", e?.message || e);
+      }
+
+      this.log.log(
+        `✅ Restore from file complete — ${Object.entries(restored).map(([t, n]) => `${t}=${n}`).join(" ")}`
+      );
+      return { success: true, restored, checksum: doc.meta.checksum };
+    } catch (err: any) {
+      this.lastError = err?.message || String(err);
+      this.log.error("❌ Restore from file failed — local data left untouched:", this.lastError);
+      this.setState("restore_failed");
+      return { success: false, error: this.lastError };
+    } finally {
+      this.restoreRunning = false;
+    }
+  }
+
+  /**
+   * Leave the `restore_failed` dead-end.
+   *
+   * A failed restore used to pin the app in `restore_failed` until the process
+   * was restarted: the Telegram bot stayed off and the UI kept showing an
+   * error even after the cause was fixed. This lets the control panel say
+   * "continue with the local data" and get back to a working state.
+   */
+  clearRestoreFailure(): { ok: boolean; state: AppState } {
+    if (this.state === "restore_failed") {
+      this.lastError = null;
+      this.setState("ready");
+    }
+    return { ok: true, state: this.state };
   }
 
   /**

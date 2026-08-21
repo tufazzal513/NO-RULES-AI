@@ -15,7 +15,8 @@ import {
   Menu, X, Plus, LayoutDashboard, GraduationCap, Globe, Database, Users,
   Settings, DatabaseBackup, Terminal, Paperclip, Mic, Volume2, Trash2,
   Download, Play, Search, RefreshCw, WifiOff, Copy, BookMarked, ShieldCheck,
-  Lock, CheckCircle2, CircleAlert, Clock, ArrowUp, Send,
+  Lock, CheckCircle2, CircleAlert, Clock, ArrowUp, Send, Pencil, Keyboard,
+  MessageSquare, Upload, PanelLeft,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------------ */
@@ -89,6 +90,8 @@ const fmtTime = (iso?: string | null) => {
 /* ------------------------------------------------------------------------ */
 
 interface ChatMessage {
+  /** Database id — present for messages loaded from / saved to the server. */
+  id?: number;
   role: "user" | "ai";
   content: string;
   mode?: string;
@@ -103,6 +106,15 @@ interface ChatViewProps {
   setInput: (v: string) => void;
   onSend: (text?: string) => void;
   onSave: (msg: ChatMessage) => void;
+  /** Rewrite an already-sent question and answer it again. */
+  onEdit?: (msg: ChatMessage, newText: string) => void | Promise<void>;
+  /** Remove a message (and its answer) from the conversation. */
+  onDelete?: (msg: ChatMessage) => void | Promise<void>;
+  /** Ask the same question again for a fresh answer. */
+  onRegenerate?: () => void | Promise<void>;
+  /** Exposed so ⌘/Ctrl+↑ can start editing the last question from anywhere. */
+  editingId?: number | null;
+  setEditingId?: (id: number | null) => void;
 }
 
 const MAIN_SUGGESTIONS = [
@@ -119,12 +131,35 @@ const TRAINING_SUGGESTIONS = [
   "2 + 2 * 3",
 ];
 
-function ChatView({ variant, userName, messages, isTyping, input, setInput, onSend, onSave }: ChatViewProps) {
+function ChatView({
+  variant, userName, messages, isTyping, input, setInput, onSend, onSave,
+  onEdit, onDelete, onRegenerate, editingId, setEditingId,
+}: ChatViewProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [listening, setListening] = useState(false);
   const [attachMsg, setAttachMsg] = useState("");
+  const [editDraft, setEditDraft] = useState("");
+
+  /** Start editing a message that was already sent. */
+  const beginEdit = (msg: ChatMessage) => {
+    if (!msg.id || !setEditingId) return;
+    setEditDraft(msg.content);
+    setEditingId(msg.id);
+  };
+
+  const cancelEdit = () => {
+    setEditingId?.(null);
+    setEditDraft("");
+  };
+
+  const commitEdit = async (msg: ChatMessage) => {
+    const next = editDraft.trim();
+    cancelEdit();
+    if (!next || next === msg.content) return;
+    await onEdit?.(msg, next);
+  };
 
   const micSupported =
     typeof window !== "undefined" &&
@@ -211,9 +246,76 @@ function ChatView({ variant, userName, messages, isTyping, input, setInput, onSe
               )}
               <div className={`min-w-0 ${msg.role === "user" ? "max-w-[85%] md:max-w-[75%]" : "flex-1 max-w-full"}`}>
                 {msg.role === "user" ? (
-                  <div className="bg-[#eff1f3] text-[#1f1f1f] px-4 py-2.5 rounded-[22px] leading-relaxed whitespace-pre-wrap text-[15px]">
-                    {msg.content}
-                  </div>
+                  editingId && msg.id === editingId ? (
+                    /* ---- inline editor for an already-sent question ---- */
+                    <div className="bg-white border-2 border-[#d2e3fc] rounded-[22px] px-3 py-2.5">
+                      <textarea
+                        value={editDraft}
+                        autoFocus
+                        rows={Math.min(8, editDraft.split("\n").length + 1)}
+                        onChange={(e) => setEditDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            void commitEdit(msg);
+                          }
+                          if (e.key === "Escape") {
+                            e.preventDefault();
+                            cancelEdit();
+                          }
+                        }}
+                        className="w-full bg-transparent resize-none outline-none text-[15px] leading-relaxed text-[#1f1f1f]"
+                      />
+                      <div className="flex items-center justify-end gap-2 mt-1.5">
+                        <span className="mr-auto text-[10px] text-[#5f6368]">Enter দিয়ে save · Esc দিয়ে cancel</span>
+                        <button
+                          onClick={cancelEdit}
+                          className="px-3 py-1.5 text-[12px] rounded-full bg-[#f0f4f9] hover:bg-[#e9eef6] transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => void commitEdit(msg)}
+                          className="px-3 py-1.5 text-[12px] rounded-full bg-[#1a1a1a] text-white hover:bg-[#333] transition-colors"
+                        >
+                          Save & rerun
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-end">
+                      <div className="bg-[#eff1f3] text-[#1f1f1f] px-4 py-2.5 rounded-[22px] leading-relaxed whitespace-pre-wrap text-[15px]">
+                        {msg.content}
+                      </div>
+                      <div className="mt-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                        {msg.id && onEdit && (
+                          <button
+                            onClick={() => beginEdit(msg)}
+                            title="Edit this message (⌘/Ctrl + ↑ for the last one)"
+                            className="p-1.5 text-[#5f6368] hover:text-[#1f1f1f] hover:bg-[#f0f4f9] rounded-full transition-colors"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => navigator.clipboard?.writeText(msg.content)}
+                          title="Copy"
+                          className="p-1.5 text-[#5f6368] hover:text-[#1f1f1f] hover:bg-[#f0f4f9] rounded-full transition-colors"
+                        >
+                          <Copy size={14} />
+                        </button>
+                        {msg.id && onDelete && (
+                          <button
+                            onClick={() => void onDelete(msg)}
+                            title="Delete this message and its answer"
+                            className="p-1.5 text-[#5f6368] hover:text-[#c5221f] hover:bg-[#fce8e6] rounded-full transition-colors"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )
                 ) : (
                   <div>
                     <div className="text-sm leading-relaxed whitespace-pre-wrap text-[#1f1f1f]">{msg.content}</div>
@@ -232,10 +334,14 @@ function ChatView({ variant, userName, messages, isTyping, input, setInput, onSe
                       </button>
                       <button
                         onClick={() => {
+                          if (idx === messages.length - 1 && onRegenerate) {
+                            void onRegenerate();
+                            return;
+                          }
                           const lastUser = [...messages].reverse().find((m) => m.role === "user");
                           if (lastUser) onSend(lastUser.content);
                         }}
-                        title="Regenerate"
+                        title="Regenerate this answer"
                         className="p-1.5 text-[#5f6368] hover:text-[#1f1f1f] hover:bg-[#f0f4f9] rounded-full transition-colors"
                       >
                         <RefreshCw size={15} />
@@ -446,6 +552,18 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [userName, setUserName] = useState("");
 
+  // ---- chat shortcuts: history search, inline edit, help ----
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [lastSent, setLastSent] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [confirmClear, setConfirmClear] = useState(false);
+  const snapshotFileRef = useRef<HTMLInputElement>(null);
+
   const loadSessions = async () => {
     try {
       const d = await api("/api/v1/chats");
@@ -483,6 +601,7 @@ export default function App() {
     const msg = (text ?? chatInput).trim();
     if (!msg || isTyping) return;
     setChatInput("");
+    setLastSent(msg);
     setMessages((prev) => [...prev, { role: "user", content: msg }]);
     setIsTyping(true);
     try {
@@ -496,11 +615,100 @@ export default function App() {
         loadSessions();
       }
       setMessages((prev) => [...prev, { role: "ai", content: d.reply, mode: d.mode }]);
+      // Pull the saved rows back so every message has its database id — that
+      // is what makes "edit / delete this message" possible.
+      if (d.sessionId) void refreshMessages(d.sessionId);
+      loadSessions();
       refreshBrain();
     } catch (e: any) {
       setMessages((prev) => [...prev, { role: "ai", content: "⚠️ " + e.message }]);
     } finally {
       setIsTyping(false);
+    }
+  };
+
+  /** Re-read a conversation from the server (ids included). */
+  const refreshMessages = async (id: number) => {
+    try {
+      const d = await api(`/api/v1/chats/${id}/messages`);
+      if (Array.isArray(d) && d.length) setMessages(d);
+    } catch {
+      /* keep what is on screen */
+    }
+  };
+
+  /** Rewrite an already-sent question and let the AI answer it again. */
+  const editMessage = async (msg: ChatMessage, next: string) => {
+    if (!activeId || !msg.id) return;
+    setIsTyping(true);
+    try {
+      await api(`/api/v1/chats/${activeId}/messages/${msg.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: next }),
+      });
+      await refreshMessages(activeId);
+      loadSessions();
+      showToast("Message edited — নতুন উত্তর তৈরি হলো ✏️");
+    } catch (e: any) {
+      showToast("⚠️ " + e.message);
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  /** Delete one message (a question takes its answer with it). */
+  const deleteMessage = async (msg: ChatMessage) => {
+    if (!activeId || !msg.id) return;
+    try {
+      await api(`/api/v1/chats/${activeId}/messages/${msg.id}`, { method: "DELETE" });
+      await refreshMessages(activeId);
+      showToast("Message deleted 🗑️");
+    } catch (e: any) {
+      showToast("⚠️ " + e.message);
+    }
+  };
+
+  /** Ask the last question again for a fresh answer. */
+  const regenerateLast = async () => {
+    if (!activeId || isTyping) return;
+    setIsTyping(true);
+    try {
+      await api(`/api/v1/chats/${activeId}/regenerate`, { method: "POST" });
+      await refreshMessages(activeId);
+    } catch (e: any) {
+      showToast("⚠️ " + e.message);
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  /** Rename a conversation from the history list. */
+  const renameChat = async (id: number, title: string) => {
+    const next = title.trim();
+    if (!next) return;
+    try {
+      await api(`/api/v1/chats/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: next }),
+      });
+      loadSessions();
+      showToast("Chat renamed ✏️");
+    } catch (e: any) {
+      showToast("⚠️ " + e.message);
+    }
+  };
+
+  /** Wipe the entire chat history (knowledge & memory are untouched). */
+  const clearAllChats = async () => {
+    try {
+      const d = await api("/api/v1/chats", { method: "DELETE" });
+      newChat();
+      loadSessions();
+      showToast(`History cleared — ${d?.deleted ?? 0}টি চ্যাট মুছে ফেলা হয়েছে 🧹`);
+    } catch (e: any) {
+      showToast("⚠️ " + e.message);
     }
   };
 
@@ -756,6 +964,56 @@ export default function App() {
     setTgActionStatus("");
   };
 
+  /**
+   * Restore straight from a snapshot file the user picks on their device —
+   * the escape hatch when Telegram itself is the problem (wrong chat id, bot
+   * without admin rights, deleted pin). Accepts .json and .json.gz.
+   */
+  const restoreFromFile = async (file: File) => {
+    if (!file) return;
+    setTgActionStatus(`restoring from ${file.name}…`);
+    setTgResult(null);
+    try {
+      const buf = new Uint8Array(await file.arrayBuffer());
+      let d: any;
+      if (file.name.endsWith(".gz")) {
+        // gzip → send as base64 so the server can gunzip it.
+        let binary = "";
+        for (let i = 0; i < buf.length; i++) binary += String.fromCharCode(buf[i]);
+        d = await api("/api/v1/telegram/restore/file", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ base64: btoa(binary) }),
+        });
+      } else {
+        const text = new TextDecoder().decode(buf);
+        d = await api("/api/v1/telegram/restore/file", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ snapshot: JSON.parse(text) }),
+        });
+      }
+      setTgResult({ ok: true, message: d.message || "Restored from file", data: d });
+      fetchTelegram();
+      loadSessions();
+      refreshBrain();
+      fetchHealth();
+    } catch (e: any) {
+      setTgResult({ ok: false, message: e.message });
+    }
+    setTgActionStatus("");
+  };
+
+  /** Leave the `restore_failed` dead-end and continue with the local data. */
+  const dismissRestoreFailure = async () => {
+    try {
+      const d = await api("/api/v1/telegram/restore/dismiss", { method: "POST" });
+      setTgResult({ ok: true, message: `Continuing with the local database (state: ${d.state}).`, data: d });
+      fetchTelegram();
+    } catch (e: any) {
+      setTgResult({ ok: false, message: e.message });
+    }
+  };
   const triggerBackup = async () => {
     try {
       const d = await api("/api/v1/backup", { method: "POST" });
@@ -882,6 +1140,116 @@ export default function App() {
     setTab(t);
     setSidebarOpen(false);
   };
+
+  /* ---------------------------------------------------------------- */
+  /* Keyboard shortcuts                                                */
+  /* ---------------------------------------------------------------- */
+
+  /** Search across chat titles AND message text (debounced, server-side). */
+  useEffect(() => {
+    if (!searchOpen) return;
+    const q = searchQuery.trim();
+    const timer = setTimeout(() => {
+      api(`/api/v1/chats?limit=50${q ? `&q=${encodeURIComponent(q)}` : ""}`)
+        .then((d: any[]) => setSearchResults(Array.isArray(d) ? d : []))
+        .catch(() => setSearchResults([]));
+    }, 180);
+    return () => clearTimeout(timer);
+  }, [searchQuery, searchOpen]);
+
+  /** Open a chat from the search palette. */
+  const openChat = (id: number) => {
+    setActiveId(id);
+    selectTab("chat");
+    setSearchOpen(false);
+    setSearchQuery("");
+  };
+
+  /** Put the last question back into the composer for a quick redo. */
+  const editLastQuestion = () => {
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    if (!lastUser) return;
+    if (lastUser.id) {
+      setEditingId(lastUser.id);
+      return;
+    }
+    setChatInput(lastUser.content || lastSent);
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.ctrlKey || e.metaKey;
+      const target = e.target as HTMLElement | null;
+      const typing =
+        !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+
+      // Esc closes whatever is open (modal → edit → search).
+      if (e.key === "Escape") {
+        if (shortcutsOpen) return setShortcutsOpen(false);
+        if (confirmClear) return setConfirmClear(false);
+        if (searchOpen) return setSearchOpen(false);
+        if (renamingId !== null) return setRenamingId(null);
+        if (editingId !== null) return setEditingId(null);
+        return;
+      }
+
+      if (!mod) {
+        // ↑ on an empty composer edits the previous question (shell-style).
+        if (e.key === "ArrowUp" && tab === "chat" && !chatInput.trim() && !typing) {
+          e.preventDefault();
+          editLastQuestion();
+        }
+        return;
+      }
+
+      // ⌘/Ctrl + K — search chat history
+      if (e.key.toLowerCase() === "k" && !e.shiftKey) {
+        e.preventDefault();
+        setSearchOpen((v) => !v);
+        return;
+      }
+      // ⌘/Ctrl + / — shortcut cheat sheet
+      if (e.key === "/") {
+        e.preventDefault();
+        setShortcutsOpen((v) => !v);
+        return;
+      }
+      // ⌘/Ctrl + B — collapse / expand the sidebar (mobile drawer)
+      if (e.key.toLowerCase() === "b" && !e.shiftKey) {
+        e.preventDefault();
+        setSidebarOpen((v) => !v);
+        return;
+      }
+      // ⌘/Ctrl + Shift + O — brand new chat
+      if (e.shiftKey && e.key.toLowerCase() === "o") {
+        e.preventDefault();
+        newChat();
+        selectTab("chat");
+        return;
+      }
+      // ⌘/Ctrl + Shift + Backspace/Delete — delete the open chat
+      if (e.shiftKey && (e.key === "Backspace" || e.key === "Delete")) {
+        e.preventDefault();
+        if (activeId && confirm("Delete this chat and all its messages?")) deleteChat(activeId);
+        return;
+      }
+      // ⌘/Ctrl + ↑ — edit the last question
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        editLastQuestion();
+        return;
+      }
+      // ⌘/Ctrl + Shift + R — regenerate the last answer
+      if (e.shiftKey && e.key.toLowerCase() === "r") {
+        e.preventDefault();
+        void regenerateLast();
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, chatInput, messages, activeId, searchOpen, shortcutsOpen, editingId, renamingId, confirmClear, isTyping]);
 
   const authed = !authStatus.passwordRequired || authStatus.adminAuthed;
 
@@ -1295,6 +1663,12 @@ export default function App() {
             <div className="mt-3 p-3 bg-[#fce8e6] border border-[#f5c6c2] rounded-xl text-xs text-[#c5221f] break-words">
               ⚠️ Restore failed — local data was NOT modified and the Telegram bot is paused.
               {tgStatus.lastError && <div className="mt-1 font-mono text-[10px] opacity-80">{tgStatus.lastError}</div>}
+              <button
+                onClick={dismissRestoreFailure}
+                className="mt-2.5 px-3 py-1.5 bg-white/70 hover:bg-white text-[#c5221f] border border-[#f5c6c2] rounded-lg text-[11px] font-medium transition-colors"
+              >
+                Continue with local data (restart the bot)
+              </button>
             </div>
           )}
         </Card>
@@ -1326,6 +1700,29 @@ export default function App() {
             <a href="/api/v1/telegram/snapshot/download" className="block w-full py-2.5 text-center bg-[#f0f4f9] hover:bg-[#e9eef6] text-[#444746] rounded-xl text-[13px] font-medium transition-all">
               ⬇️ Download Snapshot (JSON)
             </a>
+            <input
+              ref={snapshotFileRef}
+              type="file"
+              accept=".json,.gz,application/json,application/gzip"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f && confirm(`Restore the database from "${f.name}"? This replaces the current local data.`)) {
+                  void restoreFromFile(f);
+                }
+                e.target.value = "";
+              }}
+            />
+            <button
+              onClick={() => snapshotFileRef.current?.click()}
+              disabled={busy}
+              className="w-full py-2.5 bg-[#f3e8fd] hover:bg-[#e9d5fb] text-[#7627bb] rounded-xl text-[13px] font-medium transition-all disabled:opacity-50"
+            >
+              ⬆️ Restore from file (.json / .json.gz)
+            </button>
+            <p className="text-[11px] text-[#5f6368] leading-snug pt-1">
+              Telegram-এ সমস্যা হলে (ভুল channel id, bot admin নয়, pin মুছে গেছে) — ডাউনলোড করা snapshot ফাইল দিয়েই সব ডেটা ফিরিয়ে আনতে পারবেন।
+            </p>
           </div>
           {tgActionStatus && <div className="mt-3 text-center text-xs text-[#5f6368] p-2 bg-[#f8f9fa] rounded-lg">{tgActionStatus}</div>}
           {tgResult && (
@@ -1480,6 +1877,11 @@ export default function App() {
         setInput={setChatInput}
         onSend={sendMain}
         onSave={(m) => saveChatToKnowledge(m, false)}
+        onEdit={editMessage}
+        onDelete={deleteMessage}
+        onRegenerate={regenerateLast}
+        editingId={editingId}
+        setEditingId={setEditingId}
       />
     </div>
   );
@@ -1517,39 +1919,105 @@ export default function App() {
               newChat();
               selectTab("chat");
             }}
+            title="New chat (⌘/Ctrl + Shift + O)"
             className="mt-4 w-full flex items-center gap-2.5 bg-[#d3e3fd] hover:bg-[#c2d8fb] text-[#041e49] rounded-full px-4 py-2.5 text-[14px] font-medium transition-colors"
           >
             <Plus size={18} strokeWidth={2.5} />
             New chat
           </button>
+
+          {/* Search history */}
+          <button
+            onClick={() => setSearchOpen(true)}
+            title="Search chat history (⌘/Ctrl + K)"
+            className="mt-2 w-full flex items-center gap-2.5 text-[#444746] hover:bg-[#e9eef6] rounded-full px-4 py-2 text-[13px] transition-colors"
+          >
+            <Search size={16} />
+            <span className="flex-1 text-left">Search chats</span>
+            <kbd className="text-[10px] text-[#5f6368] bg-white/70 border border-[#dadce0] rounded px-1.5 py-0.5">⌘K</kbd>
+          </button>
         </div>
 
         {/* Recent chats */}
         <div className="flex-1 overflow-y-auto px-4 py-3">
-          <div className="text-[12px] font-medium text-[#5f6368] px-3 mb-1">Recent</div>
+          <div className="flex items-center justify-between px-3 mb-1">
+            <span className="text-[12px] font-medium text-[#5f6368]">Recent</span>
+            {sessions.length > 0 && (
+              <button
+                onClick={() => setConfirmClear(true)}
+                title="Delete all chats"
+                className="text-[11px] text-[#5f6368] hover:text-[#c5221f] transition-colors"
+              >
+                Clear all
+              </button>
+            )}
+          </div>
           {sessions.length === 0 && <div className="text-[12px] text-[#5f6368] px-3 py-2">No chats yet</div>}
           {sessions.map((s) => (
             <div
               key={s.id}
-              className={`group flex items-center gap-2 rounded-full px-3 py-2 mb-0.5 cursor-pointer transition-colors ${
+              className={`group flex items-center gap-1 rounded-full px-3 py-2 mb-0.5 cursor-pointer transition-colors ${
                 tab === "chat" && activeId === s.id ? "bg-[#d3e3fd] text-[#041e49]" : "text-[#444746] hover:bg-[#e9eef6]"
               }`}
               onClick={() => {
+                if (renamingId === s.id) return;
                 setActiveId(s.id);
                 selectTab("chat");
               }}
+              onDoubleClick={() => {
+                setRenamingId(s.id);
+                setRenameDraft(s.title || "");
+              }}
+              title={s.preview ? String(s.preview) : undefined}
             >
-              <span className="flex-1 text-[13px] truncate">{s.title || `Chat #${s.id}`}</span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (confirm("Delete this chat and all its messages?")) deleteChat(s.id);
-                }}
-                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#d3e3fd] rounded-full transition-opacity"
-                title="Delete chat"
-              >
-                <Trash2 size={13} />
-              </button>
+              {renamingId === s.id ? (
+                <input
+                  value={renameDraft}
+                  autoFocus
+                  onChange={(e) => setRenameDraft(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  onBlur={() => {
+                    void renameChat(s.id, renameDraft);
+                    setRenamingId(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      void renameChat(s.id, renameDraft);
+                      setRenamingId(null);
+                    }
+                    if (e.key === "Escape") setRenamingId(null);
+                  }}
+                  className="flex-1 min-w-0 bg-white border border-[#d2e3fc] rounded-full px-2.5 py-1 text-[13px] outline-none"
+                />
+              ) : (
+                <>
+                  <span className="flex-1 text-[13px] truncate">{s.title || `Chat #${s.id}`}</span>
+                  {typeof s.messageCount === "number" && s.messageCount > 0 && (
+                    <span className="opacity-0 group-hover:opacity-0 text-[10px] text-[#5f6368]">{s.messageCount}</span>
+                  )}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setRenamingId(s.id);
+                      setRenameDraft(s.title || "");
+                    }}
+                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#d3e3fd] rounded-full transition-opacity"
+                    title="Rename chat (double-click)"
+                  >
+                    <Pencil size={12} />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (confirm("Delete this chat and all its messages?")) deleteChat(s.id);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#d3e3fd] rounded-full transition-opacity"
+                    title="Delete chat"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </>
+              )}
             </div>
           ))}
 
@@ -1588,6 +2056,20 @@ export default function App() {
             <h1 className="text-[16px] font-medium text-[#1f1f1f] truncate">{tabTitle}</h1>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setSearchOpen(true)}
+              title="Search chats (⌘/Ctrl + K)"
+              className="p-2 text-[#444746] hover:bg-[#f0f4f9] rounded-full transition-colors"
+            >
+              <Search size={17} />
+            </button>
+            <button
+              onClick={() => setShortcutsOpen(true)}
+              title="Keyboard shortcuts (⌘/Ctrl + /)"
+              className="hidden sm:inline-flex p-2 text-[#444746] hover:bg-[#f0f4f9] rounded-full transition-colors"
+            >
+              <Keyboard size={17} />
+            </button>
             {authStatus.passwordRequired && (
               <span className="hidden sm:inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-[#f0f4f9] text-[#5f6368]">
                 <Lock size={11} /> {authStatus.adminAuthed ? "Admin unlocked" : "Admin locked"}
@@ -1642,6 +2124,121 @@ export default function App() {
               </button>
               <button onClick={verifyPassword} className="flex-1 py-2.5 bg-[#1a73e8] hover:bg-[#1765cc] text-white rounded-xl text-[13px] font-medium transition-colors">
                 Unlock
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Chat search palette — ⌘/Ctrl + K */}
+      {searchOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-4 pt-[12vh]" onClick={() => setSearchOpen(false)}>
+          <div className="bg-white rounded-3xl border border-[#e3e3e3] w-full max-w-lg shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-[#e3e3e3]">
+              <Search size={17} className="text-[#5f6368] shrink-0" />
+              <input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && searchResults[0]) openChat(searchResults[0].id);
+                }}
+                placeholder="চ্যাট বা মেসেজ খুঁজুন… (title + message text)"
+                autoFocus
+                className="flex-1 bg-transparent outline-none text-[15px] placeholder-[#80868b]"
+              />
+              <kbd className="text-[10px] text-[#5f6368] bg-[#f0f4f9] border border-[#dadce0] rounded px-1.5 py-0.5">Esc</kbd>
+            </div>
+            <div className="max-h-[52vh] overflow-y-auto p-2">
+              {searchResults.length === 0 && (
+                <div className="px-3 py-6 text-center text-[13px] text-[#5f6368]">
+                  {searchQuery ? "কিছু পাওয়া যায়নি" : "টাইপ করুন — সব চ্যাট ও মেসেজে খোঁজা হবে"}
+                </div>
+              )}
+              {searchResults.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => openChat(s.id)}
+                  className="w-full text-left px-3 py-2.5 rounded-2xl hover:bg-[#f0f4f9] transition-colors flex items-start gap-3"
+                >
+                  <MessageSquare size={15} className="mt-0.5 text-[#5f6368] shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[13px] font-medium truncate">{s.title || `Chat #${s.id}`}</div>
+                    {s.preview && <div className="text-[12px] text-[#5f6368] truncate">{s.preview}</div>}
+                  </div>
+                  <span className="text-[11px] text-[#5f6368] shrink-0">{s.messageCount ?? 0} msg</span>
+                </button>
+              ))}
+            </div>
+            <div className="px-4 py-2 border-t border-[#e3e3e3] text-[11px] text-[#5f6368] flex items-center gap-3">
+              <span>↵ প্রথমটি খুলুন</span>
+              <span>·</span>
+              <button onClick={() => { setSearchOpen(false); setShortcutsOpen(true); }} className="hover:text-[#1a73e8]">
+                সব shortcut দেখুন (⌘/)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Keyboard shortcut cheat sheet — ⌘/Ctrl + / */}
+      {shortcutsOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setShortcutsOpen(false)}>
+          <div className="bg-white rounded-3xl border border-[#e3e3e3] p-6 w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-4">
+              <Keyboard size={18} className="text-[#1a73e8]" />
+              <div className="text-[15px] font-medium">Chat shortcuts</div>
+            </div>
+            <div className="space-y-1.5">
+              {[
+                ["⌘/Ctrl + K", "Chat history খুঁজুন"],
+                ["⌘/Ctrl + Shift + O", "নতুন চ্যাট"],
+                ["⌘/Ctrl + B", "Sidebar খুলুন / বন্ধ করুন"],
+                ["⌘/Ctrl + ↑  বা  ↑", "শেষ প্রশ্নটি edit করুন"],
+                ["⌘/Ctrl + Shift + R", "শেষ উত্তরটি regenerate করুন"],
+                ["⌘/Ctrl + Shift + ⌫", "এই চ্যাট delete করুন"],
+                ["Enter / Shift + Enter", "পাঠান / নতুন লাইন"],
+                ["Esc", "Edit, search বা modal বন্ধ"],
+                ["Double-click on a chat", "Rename"],
+              ].map(([k, d]) => (
+                <div key={k} className="flex items-center justify-between gap-3 py-1.5 border-b border-[#f1f3f4] last:border-0">
+                  <span className="text-[13px] text-[#444746]">{d}</span>
+                  <kbd className="text-[11px] text-[#1f1f1f] bg-[#f0f4f9] border border-[#dadce0] rounded-lg px-2 py-1 whitespace-nowrap">{k}</kbd>
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={() => setShortcutsOpen(false)}
+              className="mt-5 w-full py-2.5 bg-[#f0f4f9] hover:bg-[#e9eef6] rounded-xl text-[13px] font-medium transition-colors"
+            >
+              বন্ধ করুন
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Clear-all-history confirmation */}
+      {confirmClear && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setConfirmClear(false)}>
+          <div className="bg-white rounded-3xl border border-[#e3e3e3] p-6 w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-1">
+              <Trash2 size={18} className="text-[#c5221f]" />
+              <div className="text-[15px] font-medium">Delete all chats?</div>
+            </div>
+            <p className="text-[13px] text-[#5f6368] mb-4">
+              সব চ্যাট ও মেসেজ মুছে যাবে। আপনার Knowledge, Memory আর trained model অক্ষত থাকবে।
+            </p>
+            <div className="flex gap-2">
+              <button onClick={() => setConfirmClear(false)} className="flex-1 py-2.5 bg-[#f0f4f9] hover:bg-[#e9eef6] rounded-xl text-[13px] font-medium transition-colors">
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setConfirmClear(false);
+                  void clearAllChats();
+                }}
+                className="flex-1 py-2.5 bg-[#c5221f] hover:bg-[#a50e0e] text-white rounded-xl text-[13px] font-medium transition-colors"
+              >
+                Delete all
               </button>
             </div>
           </div>

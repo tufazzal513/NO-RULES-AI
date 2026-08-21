@@ -84,6 +84,12 @@ const searxJson = (title: string) =>
     ],
   });
 
+/** Pull the searched text back out of a fake request URL. */
+const topicOf = (url: string): string => {
+  const m = /[?&](?:q|srsearch|query)=([^&]*)/.exec(url);
+  return m ? decodeURIComponent(m[1].replace(/\+/g, " ")) : "";
+};
+
 /** Every request fails at the network level (the "no internet" simulation). */
 const offlineHandler: Handler = () => Promise.reject(new TypeError("fetch failed"));
 
@@ -409,7 +415,8 @@ test("SearXNG public instances rotate between calls", async () => {
     (url) => {
       if (/searx|paulgo|inetol|baresearch|tiekoetter|priv\.au|opnxng|hbubli/.test(url)) {
         hit++;
-        return Promise.resolve(searxJson(`SearXNG hit ${hit}`));
+        // The fake answers ON TOPIC — the ranker only accepts relevant hits.
+        return Promise.resolve(searxJson(`${topicOf(url)} SearXNG hit ${hit}`));
       }
       return cleanEmpty();
     }
@@ -431,7 +438,19 @@ test("concurrent requests for the same topic share one in-flight lookup", async 
     {},
     (url) => {
       networkCalls++;
-      return new Promise((resolve) => setTimeout(() => resolve(instantJson()), 30));
+      return new Promise((resolve) =>
+        setTimeout(
+          () =>
+            resolve(
+              json({
+                Heading: topicOf(url),
+                AbstractURL: "https://duckduckgo.com/same_topic",
+                AbstractText: `${topicOf(url)} is a well documented subject with a clear definition.`,
+              })
+            ),
+          30
+        )
+      );
     }
   );
 

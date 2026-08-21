@@ -83,6 +83,17 @@ const cloud = new CloudSync({
   snapshotIntervalMinutes: Number(process.env.TELEGRAM_SNAPSHOT_INTERVAL_MINUTES) || 30,
   logger: systemLogger,
 });
+// After ANY successful restore (startup, manual, or from an uploaded file) the
+// in-memory AI model must be reloaded from the freshly restored database —
+// otherwise the brain keeps answering from the pre-restore model and the
+// restore looks like it silently "did nothing".
+cloud.setOnRestored((restored) => {
+  ai.reload();
+  const summary = Object.entries(restored)
+    .map(([table, n]) => `${table}=${n}`)
+    .join(" ");
+  pushLog("info", "system", `♻️ Restore applied and AI model reloaded — ${summary}`);
+});
 
 // Memory learned during a chat and the retrained model are mirrored too, so
 // they never live only in the ephemeral SQLite file.
@@ -412,6 +423,78 @@ app.post("/api/v1/telegram/restore", async (req, res) => {
   }
 });
 
+/**
+ * Restore from a snapshot file the user uploads — the escape hatch for when
+ * Telegram itself is the problem (wrong chat id, bot lost admin rights, pin
+ * deleted). Accepts the raw JSON document, a base64 gzip blob, or the file
+ * body posted as `application/json` / `application/octet-stream`.
+ */
+app.post(
+  "/api/v1/telegram/restore/file",
+  express.raw({ type: ["application/octet-stream", "application/gzip"], limit: "50mb" }),
+  async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      let buffer: Buffer | null = null;
+
+      if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+        buffer = req.body as Buffer;
+      } else if (req.body && typeof req.body === "object" && typeof (req.body as any).base64 === "string") {
+        buffer = Buffer.from((req.body as any).base64, "base64");
+      } else if (req.body && typeof req.body === "object" && (req.body as any).snapshot) {
+        buffer = Buffer.from(JSON.stringify((req.body as any).snapshot), "utf-8");
+      } else if (req.body && typeof req.body === "object" && (req.body as any).meta && (req.body as any).data) {
+        buffer = Buffer.from(JSON.stringify(req.body), "utf-8");
+      }
+
+      if (!buffer || buffer.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "No snapshot supplied. Send the snapshot JSON, {snapshot:{…}} or {base64:'…'}.",
+        });
+      }
+
+      const result = await cloud.restoreFromBuffer(buffer, { force: req.body?.force === true });
+      if (!result.success) {
+        return res.status(result.skipped ? 409 : 400).json({
+          success: false,
+          skipped: Boolean(result.skipped),
+          error: result.error || result.reason,
+          state: cloud.getState(),
+        });
+      }
+      res.json({
+        success: true,
+        message: "Database restored from the uploaded snapshot file.",
+        restored: result.restored,
+        checksum: result.checksum,
+        state: cloud.getState(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+);
+
+/**
+ * Leave the `restore_failed` dead-end and continue with the local data.
+ * Without this the app stayed stuck (Telegram bot off, UI showing an error)
+ * until the whole service was restarted.
+ */
+app.post("/api/v1/telegram/restore/dismiss", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const before = cloud.getState();
+  const out = cloud.clearRestoreFailure();
+  if (before === "restore_failed" && out.state === "ready") {
+    pushLog("warn", "system", "Restore failure dismissed — continuing with the local database.");
+    if (telegramBot) {
+      telegramBot.start().catch((err) => console.error("Failed to start Telegram bot:", err.message));
+    }
+    cloud.startAutoSnapshot();
+  }
+  res.json({ success: true, state: out.state, previousState: before });
+});
+
 /** Raw DB file backup to Telegram (kept for compatibility). */
 app.post("/api/v1/backup", async (req, res) => {
   if (!requireAdmin(req, res)) return;
@@ -445,11 +528,64 @@ app.post("/api/v1/users/seed", (req, res) => {
   }
 });
 
-// Chat API Routes
+// ---------------------------------------------------------------------------
+// Chat API — history, search, rename, edit & delete
+// ---------------------------------------------------------------------------
+
+/**
+ * List conversations for the sidebar / history panel.
+ *
+ * Query params:
+ *   `q`     — full-text search across chat titles AND message contents
+ *   `limit` — cap the number of chats returned (default 200)
+ *
+ * Every row carries `messageCount`, `lastMessageAt` and a `preview`, so the
+ * UI can render a real history list instead of just a title.
+ */
 app.get("/api/v1/chats", (req, res) => {
   try {
-    const chats = db.prepare("SELECT * FROM conversations ORDER BY created_at DESC").all();
-    res.json(chats);
+    const q = String((req.query.q as string) || "").trim();
+    const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 1000);
+
+    const base = `
+      SELECT c.id, c.title, c.telegram_chat_id, c.created_at,
+             COUNT(m.id) AS messageCount,
+             MAX(m.created_at) AS lastMessageAt,
+             (SELECT content FROM chat_messages WHERE session_id = c.id ORDER BY id DESC LIMIT 1) AS preview
+      FROM conversations c
+      LEFT JOIN chat_messages m ON m.session_id = c.id
+    `;
+
+    let rows: any[];
+    if (q) {
+      const like = `%${q.toLowerCase()}%`;
+      rows = db
+        .prepare(
+          `${base}
+           WHERE LOWER(COALESCE(c.title, '')) LIKE ?
+              OR EXISTS (SELECT 1 FROM chat_messages x WHERE x.session_id = c.id AND LOWER(x.content) LIKE ?)
+           GROUP BY c.id
+           ORDER BY COALESCE(MAX(m.created_at), c.created_at) DESC
+           LIMIT ?`
+        )
+        .all(like, like, limit);
+    } else {
+      rows = db
+        .prepare(
+          `${base}
+           GROUP BY c.id
+           ORDER BY COALESCE(MAX(m.created_at), c.created_at) DESC
+           LIMIT ?`
+        )
+        .all(limit);
+    }
+
+    res.json(
+      rows.map((r) => ({
+        ...r,
+        preview: typeof r.preview === "string" ? r.preview.slice(0, 120) : null,
+      }))
+    );
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -501,10 +637,175 @@ app.delete("/api/v1/chats/:id", (req, res) => {
   if (blockWhileRestoring(req, res)) return;
   if (!requireAdmin(req, res)) return;
   try {
+    db.prepare("DELETE FROM chat_messages WHERE session_id = ?").run(req.params.id);
     db.prepare("DELETE FROM conversations WHERE id = ?").run(req.params.id);
     tryMirrorDelete("conversations", req.params.id);
     pushLog("info", "system", `Conversation #${req.params.id} deleted`);
     res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** Rename a chat — the "Rename" shortcut in the history list. */
+app.patch("/api/v1/chats/:id", (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
+  try {
+    const title = String(req.body?.title ?? "").trim();
+    if (!title) return res.status(400).json({ error: "title is required" });
+    const info = db.prepare("UPDATE conversations SET title = ? WHERE id = ?").run(title.slice(0, 120), req.params.id);
+    if (info.changes === 0) return res.status(404).json({ error: "Chat not found" });
+    tryMirror("conversations", req.params.id, { id: Number(req.params.id), title: title.slice(0, 120) });
+    res.json({ success: true, id: Number(req.params.id), title: title.slice(0, 120) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Clear the whole chat history in one action ("Delete all chats").
+ * Knowledge, memory and the trained model are deliberately left untouched —
+ * this wipes conversations only.
+ */
+app.delete("/api/v1/chats", (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
+  if (!requireAdmin(req, res)) return;
+  try {
+    const ids = (db.prepare("SELECT id FROM conversations").all() as any[]).map((r) => r.id);
+    const wipe = db.transaction(() => {
+      db.prepare("DELETE FROM chat_messages").run();
+      db.prepare("DELETE FROM conversations").run();
+    });
+    wipe();
+    for (const id of ids) tryMirrorDelete("conversations", id);
+    pushLog("warn", "system", `Chat history cleared — ${ids.length} conversation(s) deleted`);
+    res.json({ success: true, deleted: ids.length });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** Delete a single message (and, for a user message, the AI reply after it). */
+app.delete("/api/v1/chats/:id/messages/:messageId", (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
+  try {
+    const sid = Number(req.params.id);
+    const mid = Number(req.params.messageId);
+    const msg = db.prepare("SELECT * FROM chat_messages WHERE id = ? AND session_id = ?").get(mid, sid) as any;
+    if (!msg) return res.status(404).json({ error: "Message not found" });
+
+    let deleted = 1;
+    db.prepare("DELETE FROM chat_messages WHERE id = ?").run(mid);
+    tryMirrorDelete("chat_messages", mid);
+
+    if (msg.role === "user") {
+      // The answer that belonged to this question goes with it.
+      const answer = db
+        .prepare("SELECT id FROM chat_messages WHERE session_id = ? AND id > ? AND role = 'ai' ORDER BY id ASC LIMIT 1")
+        .get(sid, mid) as any;
+      if (answer) {
+        db.prepare("DELETE FROM chat_messages WHERE id = ?").run(answer.id);
+        tryMirrorDelete("chat_messages", answer.id);
+        deleted++;
+      }
+    }
+    res.json({ success: true, deleted });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Edit a message that was already sent, and answer it again.
+ *
+ * This is the "edit your question" shortcut people expect from a chat app:
+ * the user message is rewritten, everything that came AFTER it in that chat is
+ * removed (the old answer is no longer valid), and the AI replies to the new
+ * wording. Returns the fresh reply so the UI can swap it in place.
+ */
+app.patch("/api/v1/chats/:id/messages/:messageId", async (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
+  try {
+    const sid = Number(req.params.id);
+    const mid = Number(req.params.messageId);
+    const content = String(req.body?.content ?? "").trim();
+    if (!content) return res.status(400).json({ error: "content is required" });
+
+    const msg = db.prepare("SELECT * FROM chat_messages WHERE id = ? AND session_id = ?").get(mid, sid) as any;
+    if (!msg) return res.status(404).json({ error: "Message not found" });
+    if (msg.role !== "user") return res.status(400).json({ error: "Only your own messages can be edited" });
+
+    // Rewrite the question and drop everything that followed it.
+    db.prepare("UPDATE chat_messages SET content = ? WHERE id = ?").run(content, mid);
+    tryMirror("chat_messages", mid, { id: mid, session_id: sid, role: "user", content, source: msg.source || "web" });
+
+    const stale = db.prepare("SELECT id FROM chat_messages WHERE session_id = ? AND id > ?").all(sid, mid) as any[];
+    for (const s of stale) {
+      db.prepare("DELETE FROM chat_messages WHERE id = ?").run(s.id);
+      tryMirrorDelete("chat_messages", s.id);
+    }
+
+    const result = await ai.replyAsync(content);
+    const am = db
+      .prepare("INSERT INTO chat_messages (session_id, role, content, source) VALUES (?, 'ai', ?, ?)")
+      .run(sid, result.reply, msg.source || "web");
+    tryMirror("chat_messages", am.lastInsertRowid, {
+      id: am.lastInsertRowid,
+      session_id: sid,
+      role: "ai",
+      content: result.reply,
+      source: msg.source || "web",
+    });
+
+    res.json({
+      success: true,
+      sessionId: sid,
+      messageId: mid,
+      content,
+      removed: stale.length,
+      reply: result.reply,
+      replyId: Number(am.lastInsertRowid),
+      mode: result.mode,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Regenerate the last AI answer of a chat — same question, fresh reply.
+ * (The 🔄 shortcut under every AI message.)
+ */
+app.post("/api/v1/chats/:id/regenerate", async (req, res) => {
+  if (blockWhileRestoring(req, res)) return;
+  try {
+    const sid = Number(req.params.id);
+    const lastUser = db
+      .prepare("SELECT * FROM chat_messages WHERE session_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1")
+      .get(sid) as any;
+    if (!lastUser) return res.status(400).json({ error: "This chat has no question to answer" });
+
+    const after = db
+      .prepare("SELECT id FROM chat_messages WHERE session_id = ? AND id > ? AND role = 'ai'")
+      .all(sid, lastUser.id) as any[];
+    for (const a of after) {
+      db.prepare("DELETE FROM chat_messages WHERE id = ?").run(a.id);
+      tryMirrorDelete("chat_messages", a.id);
+    }
+
+    const result = await ai.replyAsync(lastUser.content);
+    const am = db
+      .prepare("INSERT INTO chat_messages (session_id, role, content, source) VALUES (?, 'ai', ?, ?)")
+      .run(sid, result.reply, lastUser.source || "web");
+    tryMirror("chat_messages", am.lastInsertRowid, {
+      id: am.lastInsertRowid,
+      session_id: sid,
+      role: "ai",
+      content: result.reply,
+      source: lastUser.source || "web",
+    });
+
+    res.json({ success: true, sessionId: sid, reply: result.reply, replyId: Number(am.lastInsertRowid), mode: result.mode });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

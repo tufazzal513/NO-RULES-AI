@@ -22,6 +22,8 @@ import path from "path";
 const TG_API = "https://api.telegram.org";
 // Telegram text messages are capped at 4096 chars.
 const MAX_TEXT_LEN = 4000;
+/** Marker that turns the channel description into a durable snapshot pointer. */
+const SNAPSHOT_POINTER_PREFIX = "MYAI_SNAPSHOT|";
 
 export interface TelegramConfig {
   botToken?: string;
@@ -251,16 +253,62 @@ export class TelegramStorage {
   }
 
   /**
+   * Second, independent pointer to the latest snapshot: the channel
+   * DESCRIPTION.
+   *
+   * Pinning can silently fail (the bot may not have "Pin Messages" rights, or
+   * an admin can unpin), and when that happens a wiped Render container has no
+   * way to find its own backup — the classic "restore says: no snapshot found"
+   * failure. Writing the file_id into the channel description gives us a
+   * second durable pointer that `getChat` always returns.
+   */
+  async setSnapshotPointer(fileId: string, createdAt: string, records: number): Promise<void> {
+    const marker = `${SNAPSHOT_POINTER_PREFIX}${fileId}|${createdAt}|${records}`;
+    // Telegram caps a channel description at 255 characters.
+    await this.call("setChatDescription", { chat_id: this.chatId, description: marker.slice(0, 255) });
+  }
+
+  /** Read the snapshot pointer stored in the channel description, if any. */
+  async getSnapshotPointer(): Promise<{ fileId: string; createdAt?: string; records?: number } | null> {
+    try {
+      const chat = await this.call("getChat", { chat_id: this.chatId });
+      const desc: string = chat?.description || "";
+      if (!desc.startsWith(SNAPSHOT_POINTER_PREFIX)) return null;
+      const [fileId, createdAt, records] = desc.slice(SNAPSHOT_POINTER_PREFIX.length).split("|");
+      if (!fileId) return null;
+      return { fileId, createdAt, records: Number(records) || undefined };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Discover the latest snapshot published to the channel.
-   * Returns the pinned snapshot document's permanent file_id, if any.
+   *
+   * Order: pinned message → channel-description pointer. Both are readable
+   * with a plain `getChat`, which is the only history-like call a bot may make.
    */
   async findLatestSnapshot(): Promise<{ fileId: string; fileName: string; messageId: number } | null> {
-    const pinned = await this.getPinnedMessage();
-    const doc = pinned?.document;
-    if (!doc?.file_id) return null;
-    const name: string = doc.file_name || "";
-    if (name && !name.includes("snapshot")) return null;
-    return { fileId: doc.file_id, fileName: name, messageId: pinned.message_id };
+    let pinnedError: Error | null = null;
+    try {
+      const pinned = await this.getPinnedMessage();
+      const doc = pinned?.document;
+      if (doc?.file_id) {
+        const name: string = doc.file_name || "";
+        if (!name || name.includes("snapshot")) {
+          return { fileId: doc.file_id, fileName: name, messageId: pinned.message_id };
+        }
+      }
+    } catch (err: any) {
+      pinnedError = err;
+    }
+
+    const pointer = await this.getSnapshotPointer();
+    if (pointer) {
+      return { fileId: pointer.fileId, fileName: "channel-description-pointer", messageId: 0 };
+    }
+    if (pinnedError) throw pinnedError;
+    return null;
   }
 
   /** Download a file (or JSON snapshot) by its permanent file_id. */
