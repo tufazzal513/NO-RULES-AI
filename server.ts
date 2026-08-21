@@ -14,6 +14,7 @@ import { pushLog, recentLogs } from "./server/logs.ts";
 import { createAdminGate, adminTokenFrom } from "./server/auth.ts";
 import { datasetStats } from "./server/dataset.ts";
 import { planIngest, applyIngest } from "./server/ingest.ts";
+import { applyBuiltInSeed } from "./server/seed.ts";
 
 // Initialize express app
 const app = express();
@@ -1207,6 +1208,19 @@ async function startServer() {
     ai.reload();
   } catch (err: any) {
     console.error("❌ Startup restore crashed (continuing with local data):", err?.message || err);
+  }
+  try {
+    const seeded = applyBuiltInSeed(db);
+    if (!seeded.skipped) {
+      ai.train();
+      pushLog(
+        "info",
+        "system",
+        `🌱 Built-in language seed applied — ${seeded.knowledgeInserted} docs, ${seeded.pairsInserted} Q/A pairs; model trained`
+      );
+    }
+  } catch (err: any) {
+    console.warn("⚠️  Built-in seed skipped:", err?.message || err);
   }
   console.log(`🚀 Application state: ${cloud.getState()}`);
   pushLog("info", "system", `🚀 Application state: ${cloud.getState()}`);

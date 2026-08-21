@@ -3,6 +3,7 @@ import test from "node:test";
 import { createMemoryDatabase } from "../server/db.ts";
 import { AIEngine } from "../server/ai/engine.ts";
 import { planIngest, applyIngest, chunkText, extractPairs } from "../server/ingest.ts";
+import { applyBuiltInSeed } from "../server/seed.ts";
 
 test("chunkText splits a long dump into knowledge-sized pieces", () => {
   const body = Array.from({ length: 80 }, (_, i) => `Paragraph ${i} about বাংলা ভাষা and English mixed text. `.repeat(8)).join("\n\n");
@@ -47,4 +48,18 @@ test("applyIngest writes knowledge + chat pairs and background train learns them
   const st = e.train();
   assert.equal(st.trained, true);
   assert.ok(st.knowledgeDocs >= 1);
+});
+
+test("built-in language seed is idempotent and answers a Bangla capital question from knowledge", () => {
+  const db = createMemoryDatabase();
+  const first = applyBuiltInSeed(db);
+  assert.equal(first.skipped, false);
+  assert.ok(first.pairsInserted > 10);
+  const second = applyBuiltInSeed(db);
+  assert.equal(second.skipped, true);
+  const e = new AIEngine(db);
+  e.train();
+  const r = e.reply("বাংলাদেশের রাজধানী কী");
+  assert.equal(r.mode, "knowledge");
+  assert.match(r.reply, /ঢাকা/);
 });
