@@ -8,15 +8,26 @@ A self-hosted General AI platform with a built-in REST API and web-based control
 - **Offline personal AI brain** — no external AI service: local memory,
   knowledge retrieval (RAG over your own documents), a trainable text model
   that learns your writing style, plus a safe math engine.
-- **Gemini-style web UI** — the whole control panel looks and works like the
-  Gemini web chat: light theme, "New chat" pill + recent chats sidebar,
-  centered conversation column, suggestion cards, pill composer with working
-  attachment (text file → knowledge doc) and voice input, copy / regenerate /
-  speak / save-to-knowledge actions on every AI reply. Mobile drawer layout.
+- **Gemini-style web UI (static dark theme 🌙)** — the whole control panel
+  looks and works like the Gemini web chat, restyled in a fixed dark theme:
+  "New chat" pill + recent chats sidebar, centered conversation column,
+  suggestion cards, pill composer with working attachment (text file →
+  knowledge doc) and voice input, copy / regenerate / speak /
+  save-to-knowledge actions on every AI reply. Mobile drawer layout.
 - **Training page with chat 💬** — chat with the AI right on the Training page;
   every message is stored as training data (`source='training'`). With the
   optional `ADMIN_PASSWORD` set, Training and all write actions are
   admin-only; without it, the panel owner is the admin (single-user app).
+- **Background training — live view 🏋️** — a live panel on the Training page
+  shows exactly how the AI trains itself in the background: status
+  (idle / scheduled / running), an animated progress bar, a step-by-step phase
+  log and a run history (trigger, duration, chains + vocab learned). Every
+  automatic retrain is also written to the Activity log and exposed through
+  `GET /api/v1/ai/training`.
+- **Push training data 📥** — on the Training page you can import files
+  (`.txt` / `.md` / `.jsonl`, other-AI dumps, `User:/AI:` transcripts) **or
+  paste text straight into a box**; both are chunked into knowledge + Q/A
+  pairs and trigger an automatic background retrain.
 - **Fully working Control Panel** — Dashboard (live status + quick actions),
   Training, Research, Datasets (stats + JSONL export + per-chat delete),
   Users (add/list/delete), Telegram Cloud, Settings (live config) and
