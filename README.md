@@ -1,6 +1,6 @@
 # MY-AI
 
-A self-hosted General AI platform with a built-in REST API and web-based control panel. Designed to be deployed on Render.
+A self-hosted General AI platform with a built-in REST API and web-based control panel. The **runtime is Node.js only** (Express + React/Vite + SQLite). Python is used solely for the optional LoRA training pipeline in [`training/`](./training/). Designed to be deployed on Render.
 
 ## Features
 

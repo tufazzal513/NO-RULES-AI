@@ -32,7 +32,7 @@ python build_dataset.py --input myai-dataset.jsonl --output data
 
 ```python
 # Install
-!pip install "unsloth[colab-new]" trl datasets
+!pip install -r requirements.txt
 
 # Upload your training folder
 from google.colab import files
@@ -49,7 +49,7 @@ uploaded = files.upload()   # train.jsonl + val.jsonl + train_lora.py আপল�
 ## 🖥️ নিজের PC-তে ট্রেন (NVIDIA GPU থাকলে)
 
 ```bash
-pip install unsloth trl datasets
+pip install -r requirements.txt
 python train_lora.py --model unsloth/Llama-3.2-1B-Instruct \
     --train data/train.jsonl --val data/val.jsonl \
     --output ./my-ai-model --export-gguf

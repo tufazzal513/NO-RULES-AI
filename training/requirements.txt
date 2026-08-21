@@ -1,0 +1,8 @@
+# Optional LoRA / QLoRA pipeline (not used by the Node app).
+# See training/README.md
+unsloth
+unsloth[colab-new]
+trl
+datasets
+transformers
+torch

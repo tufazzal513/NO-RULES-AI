@@ -8,3 +8,6 @@ myai.db-*
 *.log
 .aistudio
 assets/.aistudio
+app
+main.py
+requirements.txt
