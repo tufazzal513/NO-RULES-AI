@@ -27,7 +27,21 @@ A self-hosted General AI platform with a built-in REST API and web-based control
   snapshots can be restored any time. See [`TELEGRAM_SETUP.md`](./TELEGRAM_SETUP.md).
 - **Chat from Telegram 📱** — the same bot doubles as your AI assistant: message
   it in Telegram (from your phone) and your AI replies. Long-polling, no webhook
-  needed.
+  needed. **Every web shortcut exists as a slash command too** — `/new`,
+  `/history`, `/chats`, `/edit <new text>`, `/again`, `/undo`, `/clear`,
+  `/forget`, `/research <topic>` — and the bot answers in whichever of
+  English / বাংলা / Banglish you have been writing in.
+- **Trilingual brain 🗣️ — English, বাংলা and Banglish.** Write however you
+  like ("what is my name", "আমার নাম কী", "amar nam ki") — one canonical
+  matcher folds all three onto the same intent, and the reply comes back in the
+  language you used. Banglish is transliterated to Bengali before searching, so
+  "Bangladesher rajdhani ki?" is looked up as "বাংলাদেশের রাজধানী".
+  See [`server/ai/language.ts`](./server/ai/language.ts).
+- **Chat shortcuts ⌨️** — searchable history (⌘/Ctrl + K), new chat
+  (⌘/Ctrl + Shift + O), edit a question you already sent and get a fresh answer
+  (↑ or the ✏️ button), regenerate (⌘/Ctrl + Shift + R), rename a chat
+  (double-click), delete a single message, delete a chat
+  (⌘/Ctrl + Shift + ⌫) and "Clear all". Press ⌘/Ctrl + / for the cheat sheet.
 - **Online research 🔎 — free, keyless, no signup, hardened.** Seventeen public
   sources (English **and Bengali Wikipedia**, DuckDuckGo Instant Answer/HTML/Lite,
   8 rotating SearXNG instances, Mojeek, Wiktionary, Marginalia, Wikipedia REST
@@ -70,6 +84,30 @@ files are ephemeral. For durable data and an always-on Telegram bot, use a paid
 service with a persistent disk. See the complete Bengali guide:
 [`DEPLOY_RENDER.md`](./DEPLOY_RENDER.md).
 
+## Data restore — what was fixed
+
+The Telegram private channel is the permanent database and the local SQLite
+file is only a cache, so "restore" has to be bullet-proof. Four real failure
+modes were closed:
+
+| Problem | Fix |
+| --- | --- |
+| A restore succeeded but the AI kept answering from the **pre-restore model** | `CloudSync` now fires an `onRestored` hook after *every* successful restore (startup, manual, or from a file) and the server reloads the AI model there |
+| Older backups (schema v1, before the research cache existed) were **rejected as "incomplete"** and could never be restored | `validateSnapshot` knows which tables each schema version is required to carry; tables that did not exist yet are treated as empty. A table missing from a *current*-schema snapshot is still rejected |
+| The latest snapshot was discoverable **only through the pinned message** — if the bot lost "Pin Messages" rights or the pin was removed, a wiped container reported "no snapshot found" | The snapshot `file_id` is now also written into the **channel description**, a second durable pointer that `getChat` always returns. Discovery order: pin → description → local index |
+| A failed restore pinned the app in `restore_failed` **until a full restart** (Telegram bot off, error banner stuck) | `POST /api/v1/telegram/restore/dismiss` (a button in the Telegram Cloud tab) clears the failure, restarts the bot and re-enables auto-snapshots |
+
+On top of that there is now an offline escape hatch: **Restore from file**
+(`POST /api/v1/telegram/restore/file`) accepts a `myai_snapshot_*.json` /
+`.json.gz` downloaded earlier, validates it exactly like a Telegram snapshot
+and applies it in the same single transaction — so a wrong channel id or a
+de-admined bot can never lock you out of your own data.
+
+Guarantees that were already there and still hold: a corrupt or
+checksum-mismatched snapshot is never applied, an empty remote snapshot never
+overwrites a non-empty local database, and the whole import runs in ONE
+transaction — a failure leaves the database exactly as it was.
+
 ## Custom Domain Setup
 
 Render supports custom domains natively. To add one:
@@ -90,6 +128,31 @@ available.
 The AI researches automatically when a question cannot be answered from the
 local brain, and every chat reply stays inside a hard time budget (default
 4000 ms — configurable with `RESEARCH_TIMEOUT_MS`).
+
+**How an answer is chosen (accuracy, not just availability):**
+
+1. **Query cleaning** — conversational filler is stripped before anything is
+   sent to a search engine. `"can you please tell me who is alan turing?"`
+   becomes `"who is alan turing"`; `"বাংলাদেশের রাজধানী কী"` becomes
+   `"বাংলাদেশের রাজধানী"`.
+2. **Language routing** — a Bengali/Banglish question starts at
+   `bn.wikipedia.org` (and is transliterated into Bengali first); an English
+   question starts at the English engines. Sources that cannot help are skipped
+   without spending an attempt: the Wikipedia "exact title" endpoint is only
+   used for short, title-like topics, and Wiktionary only for single words.
+3. **Relevance ranking** — every hit is scored against the question's
+   meaningful terms. The *best* hit inside a source is used (not blindly the
+   first one), and a source whose best hit is unrelated is skipped so the next
+   source gets a chance. Only a strongly matching answer ends the search.
+4. **Alternative spelling retry** — if nothing matched, the other spelling of
+   the same question (Banglish ⇄ বাংলা) is tried once, inside the same budget.
+5. **Honest confidence** — the finding carries a `confidence` score, and a
+   low-confidence answer is labelled as "the closest match I found" instead of
+   being presented as fact.
+
+The Markov model is never used to answer a *question* any more — it only
+contributes to open-ended chit-chat, so a question either gets a real answer or
+an honest "I don't know yet".
 
 | Endpoint | Description |
 | --- | --- |
@@ -119,9 +182,63 @@ the same question later even with no internet connection.
 | `GET /api/v1/settings` | Non-secret runtime configuration |
 | `GET /api/v1/dataset/stats` | Where every training example comes from |
 | `GET/POST /api/v1/users`, `DELETE /api/v1/users/:id` | User management (Telegram-mirrored) |
+| `GET /api/v1/chats?q=…&limit=…` | Chat history with message counts, previews and full-text search over titles **and** message text |
+| `PATCH /api/v1/chats/:id` | Rename a conversation |
 | `DELETE /api/v1/chats/:id` | Delete a conversation and its messages |
+| `DELETE /api/v1/chats` | Clear the whole chat history (knowledge, memory and the trained model are kept) |
+| `PATCH /api/v1/chats/:id/messages/:messageId` | Edit a question you already sent — the stale answer is dropped and the AI replies again |
+| `DELETE /api/v1/chats/:id/messages/:messageId` | Delete a message (a question takes its answer with it) |
+| `POST /api/v1/chats/:id/regenerate` | Answer the last question again |
+| `POST /api/v1/telegram/restore/file` | Restore from an uploaded snapshot file — the escape hatch when Telegram itself is misconfigured |
+| `POST /api/v1/telegram/restore/dismiss` | Leave the `restore_failed` state and continue with the local data |
 
 Optional `ADMIN_PASSWORD` — when set, Training and all write actions
 (train model, knowledge, memory, users, restore, research reset, …) require
 the password from the web UI (`x-admin-token` header). Left empty, the panel
 behaves as a single-user admin panel.
+
+## Chat shortcuts
+
+Everything a chat app is expected to have, on the keyboard and in the UI.
+
+| Shortcut | Action |
+| --- | --- |
+| `⌘/Ctrl + K` | Search the chat history — matches chat titles **and** message text |
+| `⌘/Ctrl + Shift + O` | Start a new chat |
+| `⌘/Ctrl + B` | Show / hide the sidebar |
+| `↑` (empty composer) or `⌘/Ctrl + ↑` | Edit the question you sent last |
+| `⌘/Ctrl + Shift + R` | Regenerate the last answer |
+| `⌘/Ctrl + Shift + ⌫` | Delete the open chat |
+| `Enter` / `Shift + Enter` | Send / new line |
+| `Esc` | Close the editor, the search palette or any modal |
+| `⌘/Ctrl + /` | Show this cheat sheet inside the app |
+
+Mouse equivalents: hover a **user message** for ✏️ edit / 📋 copy / 🗑️ delete,
+hover an **AI message** for copy / regenerate / speak / save-to-knowledge,
+**double-click a chat** in the sidebar to rename it, and use **Clear all** at the
+top of the Recent list to wipe the whole history (knowledge, memory and the
+trained model are never touched).
+
+Editing a question is a real edit, not a re-send: the message is rewritten in
+place, every message that came after it is removed (the old answer is no longer
+valid) and the AI answers the new wording — the same way ChatGPT/Gemini behave.
+
+The **Training tab** chat has the same edit / delete / regenerate controls, so a
+bad training exchange can be corrected instead of polluting the dataset.
+
+### …and the same shortcuts on your phone
+
+| Telegram command | Same as |
+| --- | --- |
+| `/new` | New chat |
+| `/history [n]` | Scroll back through this conversation |
+| `/chats` | The Recent list (▶️ marks the active one) |
+| `/edit <new text>` | ✏️ Edit the last question and rerun |
+| `/again` | 🔄 Regenerate |
+| `/undo` | 🗑️ Delete the last question + answer |
+| `/clear` | Delete every message of this conversation |
+| `/forget` | Wipe the AI's memory of you |
+| `/help` | The cheat sheet (⌘/Ctrl + /) |
+
+The bot picks its language from your recent messages, so a Banglish user gets
+Banglish command replies without configuring anything.

@@ -40,6 +40,15 @@
 
 import crypto from "crypto";
 import { CircuitBreaker } from "./circuit.ts";
+import {
+  buildResearchQuery,
+  relevanceScore,
+  scoringTerms,
+  STRONG_SCORE,
+  WEAK_SCORE,
+  type ResearchQuery,
+} from "./query.ts";
+import { detectLanguage } from "../ai/language.ts";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -61,6 +70,10 @@ export interface ResearchFinding {
   cached: boolean;
   /** True when this came from the cache because the internet was unreachable. */
   stale?: boolean;
+  /** 0…1 — how well the answer matches the question (relevance ranking). */
+  confidence?: number;
+  /** The cleaned query that was actually sent to the search engines. */
+  query?: string;
 }
 
 export interface ResearchResult {
@@ -138,12 +151,21 @@ export interface ResearchStatus {
 const QUESTION_FIRST_WORDS = new Set([
   "who", "what", "why", "when", "where", "how", "which", "whose",
   "কে", "কী", "কি", "কেন", "কখন", "কোথায়", "কোথা", "কীভাবে", "কিভাবে", "কার", "কত",
-  "keno", "kivabe", "kibhabe", "kothay", "kobe", "kara",
+  "কাকে", "কাদের", "কারা", "কবে", "কেমন", "কোন", "কোনটা",
+  "ke", "ki", "kii", "keno", "kivabe", "kibhabe", "kothay", "kobe", "kara",
+  "kokhon", "koto", "kar", "kake", "kemon", "kon", "konta",
+]);
+
+/** Question markers that may appear anywhere (Bengali often ends with them). */
+const QUESTION_ANYWHERE = new Set([
+  "কী", "কেন", "কীভাবে", "কিভাবে", "কোথায়", "কখন", "কত", "কবে", "কাকে", "কারা",
+  "keno", "kivabe", "kibhabe", "kothay", "kokhon", "kobe", "koto",
 ]);
 
 const NEWS_KEYWORDS = [
-  "latest", "news", "recent", "current", "weather", "breaking",
-  "সর্বশেষ", "খবর", "সংবাদ", "লেটেস্ট", "নিউজ", "আবহাওয়া", "সাম্প্রতিক",
+  "latest", "news", "recent", "current", "weather", "breaking", "live score", "update",
+  "সর্বশেষ", "খবর", "সংবাদ", "লেটেস্ট", "নিউজ", "আবহাওয়া", "সাম্প্রতিক", "আজকের",
+  "khobor", "khobar", "songbad", "abohawa", "ajker news", "sorboshesh",
 ];
 
 /** Would a human expect this message to need outside, up-to-date knowledge? */
@@ -155,24 +177,45 @@ export function isResearchQuestion(text: string): boolean {
   // so "কেন" stays one word instead of splitting into "ক" + "ন".
   const words = t.toLowerCase().split(/[^\p{L}\p{N}\p{M}]+/u).filter(Boolean);
   if (words.length > 0 && QUESTION_FIRST_WORDS.has(words[0])) return true;
+  // Bengali/Banglish put the question word at the END just as often:
+  // "বাংলাদেশের রাজধানী কী", "tomar nam ki".
+  if (words.length > 1 && QUESTION_FIRST_WORDS.has(words[words.length - 1])) return true;
   const lower = t.toLowerCase();
+  if (words.some((w) => QUESTION_ANYWHERE.has(w))) return true;
   return NEWS_KEYWORDS.some((k) => lower.includes(k));
 }
 
 /** `/research <topic>` (or `/search <topic>`) forces an online lookup. */
 export function forcedResearchTopic(text: string): string | null {
-  const m = /^\/(?:research|search)\s+(.+)$/i.exec(text.trim());
+  const m = /^\/(?:research|search|khoj|khujo)\s+(.+)$/i.exec(text.trim());
   return m ? m[1].trim() : null;
 }
 
-/** Render a finding as a chat reply. */
+/** Render a finding as a chat reply, in the language the user asked in. */
 export function formatFinding(f: ResearchFinding): string {
+  const lang = detectLanguage(f.topic || "");
+  const bn = lang !== "en";
   const lines = [`🔎 ${f.answer.trim()}`];
   if (f.sources.length > 0) {
-    lines.push("", "📎 Sources:");
+    lines.push("", bn ? "📎 সূত্র:" : "📎 Sources:");
     for (const s of f.sources) lines.push(`• ${s.title} — ${s.url}`);
   }
-  if (f.stale) lines.push("", "⚠️ (served from cache — the internet was unreachable just now)");
+  if (typeof f.confidence === "number" && f.confidence < STRONG_SCORE) {
+    lines.push(
+      "",
+      bn
+        ? "ℹ️ এটি সবচেয়ে কাছাকাছি ফলাফল — প্রশ্নটি একটু অন্যভাবে লিখলে আরও ভালো উত্তর পেতে পারেন।"
+        : "ℹ️ This is the closest match I found — try rephrasing for a sharper answer."
+    );
+  }
+  if (f.stale) {
+    lines.push(
+      "",
+      bn
+        ? "⚠️ (ইন্টারনেট পাওয়া যায়নি — সংরক্ষিত ফলাফল দেখানো হলো)"
+        : "⚠️ (served from cache — the internet was unreachable just now)"
+    );
+  }
   return lines.join("\n");
 }
 
@@ -225,8 +268,34 @@ interface ParsedHits {
 interface SourceInstance {
   name: string;
   host: string;
+  /**
+   * Which query string this source should receive — `null` skips the source
+   * entirely (without burning an attempt). This is how a Bengali question is
+   * routed to bn.wikipedia and a 12-word sentence never hits the Wikipedia
+   * "exact page title" endpoint, which is what used to produce junk answers.
+   */
+  queryFor?(q: ResearchQuery): string | null;
   buildUrl(topic: string): string;
   parse(body: string, url: string): ParsedHits | null;
+}
+
+/** Default: every source gets the cleaned primary query. */
+function queryOf(src: SourceInstance, q: ResearchQuery): string | null {
+  return src.queryFor ? src.queryFor(q) : q.primary;
+}
+
+/** The Bengali-script spelling of the question, when we have one. */
+function bengaliQuery(q: ResearchQuery): string | null {
+  if (q.lang === "bn") return q.primary;
+  if (q.lang === "banglish") return /[\u0980-\u09FF]/.test(q.primary) ? q.primary : q.variants.find((v) => /[\u0980-\u09FF]/.test(v)) ?? null;
+  return null;
+}
+
+/** A Latin-script spelling of the question, when we have one. */
+function latinQuery(q: ResearchQuery): string | null {
+  if (q.lang === "en") return q.primary;
+  const latin = [q.primary, ...q.variants].find((v) => !/[\u0980-\u09FF]/.test(v));
+  return latin ?? null;
 }
 
 const cap = (s: string, n: number) => (s.length > n ? s.slice(0, n).trimEnd() + "…" : s);
@@ -262,7 +331,12 @@ function makeWikiSource(name: string, host: string, basePath: string): SourceIns
 }
 
 const WIKIPEDIA_SEARCH: SourceInstance = makeWikiSource("Wikipedia Search", "en.wikipedia.org", "/wiki/");
-const BENGALI_WIKIPEDIA: SourceInstance = makeWikiSource("বাংলা উইকিপিডিয়া", "bn.wikipedia.org", "/wiki/");
+const BENGALI_WIKIPEDIA: SourceInstance = {
+  ...makeWikiSource("বাংলা উইকিপিডিয়া", "bn.wikipedia.org", "/wiki/"),
+  // Only ask the Bengali encyclopedia in Bengali — sending Latin text there
+  // returned nothing useful and wasted a request on every English question.
+  queryFor: (q) => bengaliQuery(q),
+};
 
 const DDG_INSTANT: SourceInstance = {
   name: "DuckDuckGo Instant Answer",
@@ -409,6 +483,15 @@ const MOJEEK: SourceInstance = {
 const WIKIPEDIA_SUMMARY: SourceInstance = {
   name: "Wikipedia REST summary",
   host: "en.wikipedia.org",
+  // This endpoint resolves an EXACT page title. Feeding it a whole sentence
+  // ("who is the prime minister of bangladesh") always 404s, so only short,
+  // title-like English topics are sent here.
+  queryFor: (q) => {
+    if (!q.titleLike || q.terms.length === 0) return null;
+    const latin = latinQuery(q);
+    if (!latin) return null;
+    return q.terms.join(" ");
+  },
   buildUrl: (t) => `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(t)}`,
   parse(body) {
     if (!body.trim()) return emptyResults();
@@ -430,6 +513,12 @@ const WIKIPEDIA_SUMMARY: SourceInstance = {
 const WIKTIONARY: SourceInstance = {
   name: "Wiktionary definition",
   host: "en.wiktionary.org",
+  // A dictionary only makes sense for a single word — never for a sentence.
+  queryFor: (q) => {
+    const latin = latinQuery(q);
+    if (!latin) return null;
+    return q.terms.length === 1 ? q.terms[0] : null;
+  },
   buildUrl: (t) =>
     `https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(t.split(/\s+/)[0].toLowerCase())}`,
   parse(body) {
@@ -502,10 +591,57 @@ const USER_AGENTS = [
 
 /** Outcome of ONE fetch attempt against ONE source. */
 type TryOutcome =
-  | { kind: "hit"; finding: ResearchFinding }
+  | { kind: "hit"; hits: ResearchSourceHit[] } // healthy response with results
   | { kind: "clean" } // healthy response, no answer for this topic
   | { kind: "http-fail"; status: number; retryAfterMs: number | null } // 429/5xx/blocked page
   | { kind: "error" }; // fetch threw / aborted — network-level problem
+
+/** A scored answer candidate collected during a sweep. */
+interface Candidate {
+  finding: ResearchFinding;
+  score: number;
+}
+
+/** Mutable bookkeeping shared by the sweeps of one research call. */
+interface SweepState {
+  tried: string[];
+  sawNetworkError: boolean;
+  sawHttp: boolean;
+  skippedOpenCircuits: boolean;
+  offlineDetected: boolean;
+  candidates: Candidate[];
+  consecutiveNetworkErrors?: number;
+}
+
+/**
+ * Rank the hits of ONE source and build the answer from the best one.
+ * This replaces the old "always take result #0" behaviour, which is why an
+ * unrelated first link used to become the AI's answer.
+ */
+function rankHits(
+  hits: ResearchSourceHit[],
+  terms: string[]
+): { answer: string; hits: ResearchSourceHit[]; score: number } | null {
+  const scored = hits
+    .map((h) => ({ hit: h, score: relevanceScore({ title: h.title, snippet: h.snippet, url: h.url }, terms) }))
+    .sort((a, b) => b.score - a.score);
+  if (scored.length === 0) return null;
+  const top = scored[0];
+  const body = (top.hit.snippet || "").trim();
+  const answer = body.length >= 20 ? body : `${top.hit.title}${body ? " — " + body : ""}`.trim();
+  if (!answer) return null;
+  return {
+    answer: cap(answer, 700),
+    hits: scored.map((s) => s.hit).slice(0, 3),
+    score: top.score,
+  };
+}
+
+/** Highest-scoring candidate across every source we tried. */
+function pickBest(candidates: Candidate[]): Candidate | null {
+  if (candidates.length === 0) return null;
+  return candidates.reduce((a, b) => (b.score > a.score ? b : a));
+}
 
 export class ResearchService {
   readonly enabled: boolean;
@@ -598,15 +734,25 @@ export class ResearchService {
   }
 
   /**
-   * Search order per call: the 4 fastest engines, Bengali Wikipedia (great for
-   * বাংলা প্রশ্ন), then 2 rotated SearXNG instances, then the reserve pool.
-   * Rotating SearXNG spreads load across all public instances.
+   * Search order per call, chosen by the language of the question.
+   *
+   * Bengali/Banglish questions start at bn.wikipedia (which actually indexes
+   * Bengali content) instead of wasting the first, freshest attempts on
+   * English-only engines — that alone fixes most "wrong answer" cases.
+   * SearXNG instances rotate so the load is spread across all of them.
    */
-  private rotatedSources(): SourceInstance[] {
-    const list: SourceInstance[] = [DDG_INSTANT, WIKIPEDIA_SEARCH, DDG_HTML, DDG_LITE, BENGALI_WIKIPEDIA];
+  private rotatedSources(q?: ResearchQuery): SourceInstance[] {
+    const bengali = q ? q.lang === "bn" || q.lang === "banglish" : false;
+    const list: SourceInstance[] = bengali
+      ? [BENGALI_WIKIPEDIA, DDG_HTML, DDG_LITE, DDG_INSTANT, WIKIPEDIA_SEARCH]
+      : [DDG_INSTANT, WIKIPEDIA_SEARCH, DDG_HTML, DDG_LITE];
     list.push(SEARXNG_INSTANCES[this.searxCursor % SEARXNG_INSTANCES.length]);
     list.push(SEARXNG_INSTANCES[(this.searxCursor + 1) % SEARXNG_INSTANCES.length]);
-    list.push(WIKTIONARY, MOJEEK, WIKIPEDIA_SUMMARY, MARGINALIA);
+    if (bengali) {
+      list.push(MOJEEK, WIKIPEDIA_SUMMARY, MARGINALIA);
+    } else {
+      list.push(WIKTIONARY, MOJEEK, WIKIPEDIA_SUMMARY, MARGINALIA, BENGALI_WIKIPEDIA);
+    }
     this.searxCursor = (this.searxCursor + 2) % SEARXNG_INSTANCES.length;
     return list;
   }
@@ -720,59 +866,49 @@ export class ResearchService {
     }
 
     // 4) Live lookup inside the hard time budget.
-    const deadline = this.now() + this.options.timeoutMs;
-    const tried: string[] = [];
-    let sawNetworkError = false;
-    let consecutiveNetworkErrors = 0;
-    let sawHttp = false;
-    let skippedOpenCircuits = 0;
-    this.attemptsThisCall = 0;
-    let bestWeak: ResearchFinding | null = null;
+    const query = buildResearchQuery(topic);
+    this.log(
+      `research: "${topic}" → query "${query.primary}" (${query.lang}` +
+        (query.variants.length ? `, ${query.variants.length} variant(s)` : "") +
+        `)`
+    );
 
-    for (const src of this.rotatedSources()) {
-      if (this.now() >= deadline) break;
-      if (this.attemptsThisCall >= this.options.maxAttempts) break;
-      if (!this.underRateCap()) break;
-      tried.push(src.name);
-      if (this.breaker.isOpen(src.host)) {
-        skippedOpenCircuits++;
-        continue;
-      }
-      const outcome = await this.trySource(src, topic, deadline, { allowRetry: sawHttp });
-      if (outcome.kind === "hit") {
-        // A very short answer is weak — keep it as a fallback and look for better.
-        if (outcome.finding.answer.length < 30) {
-          if (!bestWeak) bestWeak = outcome.finding;
-          continue;
-        }
-        this.save(key, topic, outcome.finding, src.name);
-        return { ok: true, finding: outcome.finding };
-      }
-      if (outcome.kind === "clean") {
-        sawHttp = true;
-        consecutiveNetworkErrors = 0;
-      } else if (outcome.kind === "http-fail") {
-        sawHttp = true;
-        consecutiveNetworkErrors = 0;
-        this.breaker.recordFailure(src.host, outcome.retryAfterMs);
-        this.log(`research: ${src.name} answered HTTP ${outcome.status} — circuit opened`);
-      } else {
-        sawNetworkError = true;
-        consecutiveNetworkErrors++;
-        this.breaker.recordFailure(src.host);
-        if (!sawHttp && consecutiveNetworkErrors >= this.options.offlineFailFastAfter) {
-          this.log(
-            `research: ${consecutiveNetworkErrors} consecutive network errors with no HTTP response — internet appears unreachable, stopping early`
-          );
-          break;
-        }
+    const deadline = this.now() + this.options.timeoutMs;
+    const state: SweepState = {
+      tried: [],
+      sawNetworkError: false,
+      sawHttp: false,
+      skippedOpenCircuits: false,
+      offlineDetected: false,
+      candidates: [],
+    };
+    this.attemptsThisCall = 0;
+
+    let best = await this.sweep(query, query.primary, deadline, state);
+
+    // The primary spelling found nothing usable? Try the other spelling of the
+    // same question (Banglish ⇄ বাংলা) — but never while the internet is down.
+    if (!best && !state.offlineDetected && state.sawHttp) {
+      for (const variant of query.variants) {
+        if (this.now() >= deadline) break;
+        if (this.attemptsThisCall >= this.options.maxAttempts) break;
+        if (!this.underRateCap()) break;
+        this.log(`research: retrying with the alternative spelling "${variant}"`);
+        best = await this.sweep(query, variant, deadline, state);
+        if (best) break;
       }
     }
 
-    // A weak answer is still better than nothing — but never while offline.
-    if (bestWeak && sawHttp) {
-      this.save(key, topic, bestWeak, "best-effort");
-      return { ok: true, finding: bestWeak };
+    if (best) {
+      this.save(key, topic, best, best.sourceHosts[0] ?? "web");
+      return { ok: true, finding: best };
+    }
+
+    // No strong answer — fall back to the best of everything we collected.
+    const fallback = pickBest(state.candidates);
+    if (fallback && fallback.score > WEAK_SCORE && state.sawHttp) {
+      this.save(key, topic, fallback.finding, "best-effort");
+      return { ok: true, finding: fallback.finding };
     }
 
     // 5) Internet unreachable? Serve the stale cache instead of nothing.
@@ -782,9 +918,15 @@ export class ResearchService {
       return { ok: true, finding: { ...finding, cached: true, stale: true } };
     }
 
+    // A very weak answer still beats "I found nothing" when the net was up.
+    if (fallback && state.sawHttp) {
+      this.save(key, topic, fallback.finding, "best-effort");
+      return { ok: true, finding: fallback.finding };
+    }
+
     // Every host either failed at the network level or was already cooling
     // down from earlier failures — treat that as "no internet right now".
-    const offline = sawNetworkError || (this.attemptsThisCall === 0 && skippedOpenCircuits > 0);
+    const offline = state.sawNetworkError || (this.attemptsThisCall === 0 && state.skippedOpenCircuits);
 
     // 6) The internet worked but no source knew the answer — remember that for
     //    a while so repeated questions don't hammer the sources again.
@@ -794,7 +936,92 @@ export class ResearchService {
         .run(key, topic);
     }
 
-    return { ok: false, offline, triedSources: tried };
+    return { ok: false, offline, triedSources: state.tried };
+  }
+
+  /**
+   * ONE pass over the source list with a single query string.
+   * Returns a finding as soon as a source produces a *strongly relevant*
+   * answer; weaker hits are collected in `state.candidates` so the caller can
+   * still fall back to the best of them.
+   */
+  private async sweep(
+    query: ResearchQuery,
+    queryText: string,
+    deadline: number,
+    state: SweepState
+  ): Promise<ResearchFinding | null> {
+    // Terms of the string we are actually searching for (Bengali vs Latin).
+    const terms = scoringTerms(queryText);
+    const scoreTerms = terms.length > 0 ? terms : query.terms;
+
+    for (const src of this.rotatedSources(query)) {
+      if (this.now() >= deadline) break;
+      if (this.attemptsThisCall >= this.options.maxAttempts) break;
+      if (!this.underRateCap()) break;
+
+      // Language / shape routing — skipping costs nothing.
+      const routed = queryOf(src, query);
+      if (routed === null) continue;
+      // Bengali sources always get the Bengali spelling, everyone else gets
+      // the sweep's query text.
+      const searchText = src.host === "bn.wikipedia.org" ? routed : queryText;
+
+      state.tried.push(src.name);
+      if (this.breaker.isOpen(src.host)) {
+        state.skippedOpenCircuits = true;
+        continue;
+      }
+
+      const outcome = await this.trySource(src, searchText, deadline, { allowRetry: state.sawHttp });
+
+      if (outcome.kind === "hit") {
+        state.sawHttp = true;
+        state.consecutiveNetworkErrors = 0;
+        // Pick the BEST matching hit inside this source, not simply the first.
+        const ranked = rankHits(outcome.hits, scoreTerms);
+        if (!ranked) continue;
+        const finding: ResearchFinding = {
+          topic: query.primary,
+          answer: ranked.answer,
+          sources: ranked.hits,
+          sourceHosts: [src.host],
+          timestamp: this.now(),
+          cached: false,
+          confidence: Math.round(ranked.score * 100) / 100,
+          query: searchText,
+        };
+        state.candidates.push({ finding, score: ranked.score });
+        if (ranked.score >= STRONG_SCORE && ranked.answer.length >= 25) {
+          this.log(`research: ${src.name} answered with confidence ${ranked.score.toFixed(2)}`);
+          return finding;
+        }
+        this.log(`research: ${src.name} hit was weak (${ranked.score.toFixed(2)}) — checking another source`);
+        continue;
+      }
+
+      if (outcome.kind === "clean") {
+        state.sawHttp = true;
+        state.consecutiveNetworkErrors = 0;
+      } else if (outcome.kind === "http-fail") {
+        state.sawHttp = true;
+        state.consecutiveNetworkErrors = 0;
+        this.breaker.recordFailure(src.host, outcome.retryAfterMs);
+        this.log(`research: ${src.name} answered HTTP ${outcome.status} — circuit opened`);
+      } else {
+        state.sawNetworkError = true;
+        state.consecutiveNetworkErrors = (state.consecutiveNetworkErrors ?? 0) + 1;
+        this.breaker.recordFailure(src.host);
+        if (!state.sawHttp && state.consecutiveNetworkErrors >= this.options.offlineFailFastAfter) {
+          this.log(
+            `research: ${state.consecutiveNetworkErrors} consecutive network errors with no HTTP response — internet appears unreachable, stopping early`
+          );
+          state.offlineDetected = true;
+          break;
+        }
+      }
+    }
+    return null;
   }
 
   /** Try one source, with ONE retry for transient network errors when the internet is known to be up. */
@@ -881,17 +1108,7 @@ export class ResearchService {
         return { kind: "clean" };
       }
       this.breaker.recordSuccess(src.host);
-      return {
-        kind: "hit",
-        finding: {
-          topic,
-          answer: parsed.answer,
-          sources: parsed.results.slice(0, 3),
-          sourceHosts: [src.host],
-          timestamp: this.now(),
-          cached: false,
-        },
-      };
+      return { kind: "hit", hits: parsed.results.slice(0, 3) };
     } catch (e) {
       if (isAbortError(e)) {
         this.log(`research: ${src.name} timed out (${perSourceTimeout}ms)`);

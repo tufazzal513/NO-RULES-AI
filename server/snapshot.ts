@@ -37,6 +37,28 @@ import {
 export const SCHEMA_VERSION = 2;
 export const APP_NAME = "NO-RULES-AI";
 
+/**
+ * Which tables a snapshot MUST contain, per schema version.
+ *
+ * This is what makes old backups restorable: a snapshot written before the
+ * research cache existed (schema v1) simply has no `research_cache` /
+ * `research_negcache` key, and rejecting it would strand the user's real data
+ * in the channel forever. Missing tables from an older schema are treated as
+ * empty; a table missing from a CURRENT-schema snapshot is still corruption.
+ */
+export const REQUIRED_TABLES_BY_VERSION: Record<number, readonly string[]> = {
+  1: ["users", "conversations", "chat_messages", "knowledge", "memory", "ai_model", "telegram_index"],
+  2: SNAPSHOT_TABLES,
+};
+
+/** The tables a snapshot of `version` is required to carry. */
+export function requiredTables(version: number): readonly string[] {
+  const known = REQUIRED_TABLES_BY_VERSION[version];
+  if (known) return known;
+  // Unknown but older-than-current version → be permissive, ask for the v1 core.
+  return version < SCHEMA_VERSION ? REQUIRED_TABLES_BY_VERSION[1] : SNAPSHOT_TABLES;
+}
+
 export interface SnapshotMeta {
   schemaVersion: number;
   createdAt: string;
@@ -171,10 +193,18 @@ export function validateSnapshot(doc: any): ValidationResult {
   }
 
   let totalRecords = 0;
+  const required = requiredTables(meta.schemaVersion);
   for (const table of SNAPSHOT_TABLES) {
     const rows = data[table];
+    if (rows === undefined || rows === null) {
+      // Absent table: fatal only if this schema version promised to carry it.
+      if (required.includes(table)) {
+        return { valid: false, reason: `Snapshot is incomplete: table "${table}" is missing.`, totalRecords: 0 };
+      }
+      continue; // older snapshot — the table simply did not exist yet
+    }
     if (!Array.isArray(rows)) {
-      return { valid: false, reason: `Snapshot is incomplete: table "${table}" is missing.`, totalRecords: 0 };
+      return { valid: false, reason: `Snapshot is corrupt: table "${table}" is not a list.`, totalRecords: 0 };
     }
     if (meta.counts && typeof meta.counts[table] === "number" && meta.counts[table] !== rows.length) {
       return {
