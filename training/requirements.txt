@@ -1,8 +1,14 @@
 # Optional LoRA / QLoRA pipeline (not used by the Node app).
-# See training/README.md
+# See training/GUIDE_COLAB_BN.md
+#
+#   pip install -r requirements.txt
+#
+# On Google Colab just run:  pip install -U unsloth trl transformers datasets
 unsloth
-unsloth[colab-new]
-trl
-datasets
-transformers
+trl>=0.9
+transformers>=4.44
+datasets>=2.19
+accelerate
+peft
+bitsandbytes
 torch

@@ -74,8 +74,12 @@ A self-hosted General AI platform with a built-in REST API and web-based control
   Telegram) and (2) research findings auto-saved as knowledge documents.
   Both are automatic, both are mirrored to the Telegram snapshot, and the
   Datasets page shows exactly where each training example came from.
-- **Train your own model** — LoRA fine-tuning pipeline for a fully personal AI.
-  See [`training/README.md`](./training/README.md).
+- **Train your own model** — LoRA fine-tuning pipeline for a fully personal AI,
+  with a **1–5 hour Google Colab notebook** that teaches it Bangla + English
+  conversation inside a wall-clock time budget (auto Bangla/English dataset mix,
+  GPU speed probe, checkpoint/resume, GGUF export for Ollama).
+  See [`training/GUIDE_COLAB_BN.md`](./training/GUIDE_COLAB_BN.md) and
+  [`training/README.md`](./training/README.md).
 - Render Deployment Ready
 
 ## Deployment on Render
