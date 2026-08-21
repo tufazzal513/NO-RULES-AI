@@ -1,1 +1,82 @@
 @import "tailwindcss";
+
+/* ------------------------------------------------------------------ */
+/* MY-AI — Gemini-inspired light theme                                 */
+/* ------------------------------------------------------------------ */
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  font-family: "Google Sans", "Product Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: #ffffff;
+  color: #1f1f1f;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Thin, subtle scrollbars (Google style) */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #d7dbe0;
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #bcc1c7;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Shimmer "thinking" bar — Gemini-style AI typing indicator */
+@keyframes shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+.shimmer {
+  background: linear-gradient(90deg, #e8eaed 25%, #f8f9fa 50%, #e8eaed 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s infinite linear;
+}
+
+/* Soft pulse for live dots */
+@keyframes softPulse {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.soft-pulse {
+  animation: softPulse 1.2s ease-in-out infinite;
+}
+
+/* Toast slide-up */
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+.toast-in {
+  animation: toastIn 0.25s ease-out both;
+}
+
+/* Sidebar drawer transition */
+.drawer {
+  transition: transform 0.25s ease-in-out;
+}
