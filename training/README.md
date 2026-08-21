@@ -1,10 +1,10 @@
 # 🎓 নিজের AI ট্রেন করুন — সম্পূর্ণ গাইড
 
-> ⭐ **সবচেয়ে সহজ ও নতুন পথ (সুপারিশ):** [`GUIDE_COLAB_BN.md`](./GUIDE_COLAB_BN.md) +
-> নোটবুক [`colab_bangla_english.ipynb`](./colab_bangla_english.ipynb) —
-> **১ থেকে ৫ ঘণ্টার টাইম-বাজেট** দিন, বাংলা+ইংরেজি ডাটা অটো নামবে, মিশবে,
-> ট্রেনিং হবে আর সময় শেষ হওয়ার আগেই মডেল সেভ হয়ে যাবে।
-> 🐣 একদম নতুন? সাথে `BEGINNER_GUIDE_BN.md`-ও দেখতে পারেন।
+> ⭐ **সবচেয়ে সহজ পথ:** [`colab_one_click.py`](./colab_one_click.py)-এর পুরো কোডটা
+> Colab-এর একটা সেলে পেস্ট করে **Run** চাপুন। **১ থেকে ৫ ঘণ্টার টাইম-বাজেট** দিন —
+> বাংলা+ইংরেজি ডাটা অটো নামবে, মিশবে, ট্রেনিং হবে, OOM হলে নিজেই সামলাবে আর
+> সময় শেষ হওয়ার আগেই মডেল সেভ + GGUF এক্সপোর্ট হয়ে যাবে।
+> 🐣 একদম নতুন? [`BEGINNER_GUIDE_BN.md`](./BEGINNER_GUIDE_BN.md) ধাপে ধাপে দেখাবে।
 
 এই ফোল্ডারে আপনার **নিজের পার্সোনাল AI** ট্রেন করার সবকিছু আছে। এখানে কোনো কোম্পানির API ব্যবহার হয় না — আপনি একটা ওপেন-সোর্স মডেলকে (Qwen/Llama/Gemma/Sarvam) **আপনার নিজের ডেটায়** ফাইন-টিউন করে নেবেন, ফলে সেটা আপনার ঢঙে কথা বলবে, আপনার তথ্য জানবে এবং ১০০% আপনারই থাকবে।
 
@@ -12,12 +12,16 @@
 
 | ফাইল | কাজ |
 |---|---|
-| `colab_bangla_english.ipynb` | ⭐ Colab নোটবুক — ১–৫ ঘণ্টার গাইডেড ট্রেনিং |
-| `GUIDE_COLAB_BN.md` | ⭐ ধাপে ধাপে বাংলা গাইড + ট্রাবলশুটিং |
-| `train_lora.py` | ট্রেনিং ইঞ্জিন (টাইম-বাজেট, স্পিড-প্রোব, resume, GGUF) |
+| `colab_one_click.py` | ⭐ **এক সেলে পুরো ট্রেনিং** (Colab-এ পেস্ট → Run) |
+| `colab_bangla_english.ipynb` | ⭐ উপরের স্ক্রিপ্টটাই নোটবুক আকারে (অটো-জেনারেটেড) |
+| `kaggle_one_click.py` | Kaggle ভার্সন — ডিসকানেক্ট হয় না, সপ্তাহে ৩০ ঘণ্টা ফ্রি GPU |
+| `BEGINNER_GUIDE_BN.md` | 🐣 একদম নতুনদের জন্য সবচেয়ে সহজ পথ |
+| `train_lora.py` | ট্রেনিং ইঞ্জিন (টাইম-বাজেট, OOM অটো-রিকভারি, resume, GGUF, লাইভ রিপোর্ট) |
 | `build_mix.py` | বাংলা+ইংরেজি ডাটা মিক্সার (ভাষা ব্যালান্স, ডিডুপ, ফিল্টার) |
-| `build_from_hf.py`, `build_dataset.py` | পুরনো/সরল কনভার্টার (এখনও কাজ করে) |
-| `myai_training_colab.ipynb` | পুরনো নোটবুক (নতুনটাই ব্যবহার করুন) |
+| `make_notebook.py` | `colab_one_click.py` → `.ipynb` রি-জেনারেট করে (দুটো যেন আলাদা না হয়) |
+
+> ✏️ `colab_one_click.py` বদলালে `python training/make_notebook.py` চালিয়ে
+> নোটবুকটা আবার বানিয়ে নিন — ওটাই একমাত্র সোর্স অফ ট্রুথ।
 
 ## ⚡ এক কমান্ডে অটো ট্রেনিং — ঘড়ি ধরে
 
@@ -74,9 +78,10 @@ Small brain এখনই কাজ করে। Big brain বানাতে এ
 ## 🔧 ধাপ ২ — ডেটা প্রস্তুত
 
 ```bash
-python build_dataset.py --input myai-dataset.jsonl --output data
+python build_mix.py --recipe balanced --budget-hours 5 \
+    --extra-jsonl myai-dataset.jsonl --output data
 ```
-→ `data/train.jsonl` আর `data/val.jsonl` তৈরি হবে।
+→ `data/train.jsonl` আর `data/val.jsonl` তৈরি হবে (বাংলা+ইংরেজি মিশিয়ে)।
 
 ### 🌐 বিকল্প — Hugging Face ডেটাসেট (যেমন UltraChat 200k)
 
@@ -86,11 +91,8 @@ python build_dataset.py --input myai-dataset.jsonl --output data
 
 ```bash
 # নিজের PC-তে (বা Colab সেলে ! দিয়ে)
-python build_from_hf.py \
-    --dataset HuggingFaceH4/ultrachat_200k \
-    --split train_sft \
-    --limit 5000 \
-    --output data
+python train_lora.py --hf-dataset HuggingFaceH4/ultrachat_200k \
+    --hf-split train_sft --hf-limit 5000 --output ./my-ai-model
 ```
 
 → `data/train.jsonl` + `data/val.jsonl` তৈরি হবে — তারপর ধাপ ৩-এ চালান।
@@ -166,3 +168,31 @@ MODEL_PATH=http://localhost:11434
 | `unsloth/Llama-3.1-8B-Instruct` | ~16 GB | বেশি শক্তিশালী, বেশি VRAM লাগবে |
 
 > ⚠️ **সত্যি কথা:** ছোট ডেটাসেটে (কয়েকশো কথোপকথন) ফাইন-টিউন করলে মডেল আপনার **স্টাইল/ফরম্যাট** শিখবে, কিন্তু বিশ্ব-জ্ঞান বাড়বে না। সেটার জন্য RAG (MY-AI-এর Knowledge ট্যাব) ব্যবহার করুন — সেটাই সবচেয়ে কার্যকর।
+
+## 🛟 মেমোরি / OOM — স্ক্রিপ্ট নিজেই সামলায়
+
+ফ্রি Colab T4 (১৫ GB VRAM + ১২.৭ GB RAM) আর Kaggle P100-এ OOM যেন ট্রেনিং না
+থামায়, সেজন্য `train_lora.py`-তে কয়েক স্তরের সুরক্ষা আছে:
+
+| স্তর | কী করে |
+|---|---|
+| অ্যালোকেটর | `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` — ফ্র্যাগমেন্টেশনজনিত OOM বন্ধ |
+| অটো-টিউন | GPU-র আসল VRAM দেখে `--batch-size` / `--max-seq-length` নামিয়ে দেয় (কখনো বাড়ায় না)। effective batch ঠিক রাখতে grad-accum বাড়ে |
+| স্পিড-প্রোব | আসল রানের আগেই ছোট প্রোব চালিয়ে OOM ধরে ফেলে; প্রোব শেষে optimizer/grad পুরোপুরি ফ্রি করে (`gc` + `empty_cache`) |
+| রিট্রাই ল্যাডার | OOM হলে ধাপে ধাপে হালকা করে চেকপয়েন্ট থেকে আবার চালায়: eval বন্ধ → batch ১ → packing বন্ধ → seq ছোট → grad-accum কম |
+| eval | `per_device_eval_batch_size=1`, `prediction_loss_only`, সর্বোচ্চ ২০০ রো — eval-ই সবচেয়ে বড় মেমোরি স্পাইক |
+| RAM | ডাটা এক পাসেই `text`-এ রূপান্তর (কর্পাস দুবার RAM-এ থাকে না), `dataset_num_proc=1` (CUDA init-এর পর fork করলে Colab-এর RAM ডাবল হয়ে সেশন মরে) |
+| GGUF এক্সপোর্ট | RAM বাজেট ৬০% → ৪০% → ২৫% নামিয়ে রিট্রাই; না পারলেও LoRA adapter সেভ থাকে |
+
+হাতে নিয়ন্ত্রণ চাইলে:
+
+```bash
+python train_lora.py --recipe balanced --time-budget-hours 3 \
+    --batch-size 1 --grad-accum 16 --max-seq-length 512 \
+    --no-eval --no-packing --no-autotune
+```
+
+`colab_one_click.py` / `kaggle_one_click.py` চাইল্ড প্রসেসের exit code দেখে:
+`-9` / `137` মানে RAM শেষ হয়ে প্রসেস kill হয়েছে — তখন নিজে থেকেই হালকা সেটিংসে
+(`--no-eval --batch-size 1`, তারপর `--no-packing` + ছোট seq) সর্বোচ্চ ৩ বার আবার
+চালায়, প্রতিবারই শেষ চেকপয়েন্ট থেকে।

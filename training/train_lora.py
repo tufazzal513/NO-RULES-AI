@@ -42,11 +42,23 @@ Prerequisites (run once):
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import random
+import shutil
 import time
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# 0. OOM guards — these MUST be set before torch/unsloth is imported
+# ---------------------------------------------------------------------------
+# `expandable_segments` lets the CUDA allocator grow/shrink a single arena
+# instead of fragmenting into unusable blocks. On a 16 GB T4 this alone is the
+# difference between "CUDA out of memory" at step ~40 and a clean 3-hour run.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+# HF tokenizers forking after CUDA init is a classic Colab RAM killer.
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 # ---------------------------------------------------------------------------
 # Model presets — what actually fits in 1–5 hours on a free Colab T4
@@ -96,6 +108,265 @@ def load_unsloth():
             "Unsloth is not installed. Run:\n"
             "  pip install unsloth 'unsloth[colab-new]' datasets trl\n\n" + str(exc)
         )
+
+
+# ---------------------------------------------------------------------------
+# 0b. MEMORY — everything that keeps a free T4 / P100 from dying with OOM
+# ---------------------------------------------------------------------------
+
+OOM_MARKERS = (
+    "out of memory",
+    "cuda oom",
+    "cublas_status_alloc_failed",
+    "cudnn_status_alloc_failed",
+    "not enough memory",
+    "can't allocate memory",
+    "defaultcpuallocator",
+)
+
+
+def is_oom_error(exc: BaseException) -> bool:
+    """True for CUDA *and* host-RAM allocation failures, on any torch version."""
+    if isinstance(exc, MemoryError):
+        return True
+    name = type(exc).__name__.lower()
+    if "outofmemory" in name:
+        return True
+    text = f"{exc}".lower()
+    return any(marker in text for marker in OOM_MARKERS)
+
+
+def free_memory(torch=None, label: str = "") -> None:
+    """Release everything Python and CUDA are still holding on to.
+
+    `del trainer` on its own is NOT enough: the optimizer states, the gradient
+    buffers and the autograd graph sit in reference cycles, so they only go
+    away after an explicit gc pass. Skipping this is why a second trainer
+    (the speed probe → the real run) used to OOM on a 16 GB card.
+    """
+    for _ in range(2):
+        gc.collect()
+    if torch is not None:
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+                torch.cuda.reset_peak_memory_stats()
+        except Exception:
+            pass
+    gc.collect()
+    if label:
+        print(f"🧹 memory freed ({label}){gpu_memory_note(torch)}")
+
+
+def gpu_memory_note(torch=None) -> str:
+    if torch is None:
+        return ""
+    try:
+        if not torch.cuda.is_available():
+            return ""
+        free_b, total_b = torch.cuda.mem_get_info()
+        return f" — GPU {free_b / 1e9:.1f} GB free of {total_b / 1e9:.1f} GB"
+    except Exception:
+        return ""
+
+
+def gpu_total_gb(torch) -> float:
+    try:
+        if not torch.cuda.is_available():
+            return 0.0
+        return torch.cuda.get_device_properties(0).total_memory / 1e9
+    except Exception:
+        return 0.0
+
+
+def host_ram_gb() -> float:
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
+    except Exception:
+        return 0.0
+
+
+# Safe ceilings per GPU size. These are CAPS, never upgrades: an explicit
+# --batch-size / --max-seq-length is respected unless it cannot possibly fit.
+VRAM_CAPS = [
+    # (max GB this rule applies to, batch, seq-len, note)
+    (9.0, 1, 512, "small GPU (<10 GB)"),
+    (13.0, 1, 768, "12 GB class GPU"),
+    (17.0, 2, 1024, "T4 / V100 16 GB"),
+    (25.0, 4, 1536, "L4 / A10 24 GB"),
+    (10 ** 6, 8, 2048, "big GPU"),
+]
+
+
+def apply_memory_caps(args, torch) -> None:
+    """Lower (never raise) batch/seq to what this specific GPU can hold."""
+    if not args.autotune:
+        return
+    total = gpu_total_gb(torch)
+    if total <= 0:
+        return
+    batch_cap, seq_cap, note = next(
+        (b, s, n) for limit, b, s, n in VRAM_CAPS if total <= limit
+    )
+    # A 3B+ model in 4-bit needs roughly twice the activation room of a 1.5B.
+    name = args.model.lower()
+    if any(tag in name for tag in ("-3b", "-4b", "-7b", "-8b", "-9b", "-12b")):
+        batch_cap = max(1, batch_cap // 2)
+        if total <= 17.0:
+            seq_cap = min(seq_cap, 768)
+    if not args.load_in_4bit:
+        batch_cap = max(1, batch_cap // 2)
+
+    changed = []
+    if args.batch_size > batch_cap:
+        # Keep the effective batch (and therefore the LR schedule) identical.
+        factor = max(1, args.batch_size // batch_cap)
+        args.grad_accum = max(1, args.grad_accum * factor)
+        changed.append(f"batch {args.batch_size}→{batch_cap} (grad-accum ×{factor})")
+        args.batch_size = batch_cap
+    if args.max_seq_length > seq_cap:
+        changed.append(f"max-seq-length {args.max_seq_length}→{seq_cap}")
+        args.max_seq_length = seq_cap
+
+    print(f"\n🧠 GPU: {torch.cuda.get_device_name(0)} — {total:.1f} GB VRAM"
+          f" · RAM {host_ram_gb():.1f} GB  [{note}]")
+    if changed:
+        print("   ⚙️  OOM-safe auto-tune: " + ", ".join(changed))
+        print("   (বন্ধ করতে: --no-autotune)")
+    else:
+        print(f"   ✅ settings fit: batch {args.batch_size} × grad-accum "
+              f"{args.grad_accum} × seq {args.max_seq_length}")
+
+
+def shrink_for_oom(args) -> str | None:
+    """One rung down the memory ladder. Returns a description, or None if we
+    are already at the smallest possible configuration.
+
+    Ordered cheapest-loss-first: monitoring, then throughput, then the things
+    that actually change what the model sees.
+    """
+    if args.eval_enabled:
+        args.eval_enabled = False
+        return "evaluation off (eval is the biggest single memory spike)"
+    if args.batch_size > 1:
+        args.grad_accum *= 2
+        args.batch_size //= 2
+        return (f"batch → {args.batch_size} (grad-accum → {args.grad_accum}, "
+                "effective batch unchanged)")
+    if args.packing:
+        args.packing = False
+        return "packing off (shorter, padded sequences use less peak memory)"
+    if args.max_seq_length > 384:
+        args.max_seq_length = max(384, args.max_seq_length - 256)
+        return f"max-seq-length → {args.max_seq_length}"
+    if args.grad_accum > 1:
+        args.grad_accum = max(1, args.grad_accum // 2)
+        return f"grad-accum → {args.grad_accum} (smaller effective batch)"
+    return None
+
+
+
+
+# ---------------------------------------------------------------------------
+# 0c. LIVE REPORTING — push progress to the MY-AI control panel
+# ---------------------------------------------------------------------------
+
+
+class PanelReporter:
+    """Best-effort heartbeat to the MY-AI control panel.
+
+    Training runs on a free Colab/Kaggle GPU; the control panel runs on
+    Render. This posts a tiny JSON blob every few steps so the Training page
+    can show a live progress bar, loss curve and ETA for a run that is
+    happening somewhere else entirely.
+
+    Every failure is swallowed: a flaky network must never kill a 5-hour
+    training run.
+    """
+
+    def __init__(self, url: str | None, token: str | None, run_id: str,
+                 platform: str = "colab", every_steps: int = 5):
+        self.url = (url or "").strip().rstrip("/")
+        if self.url and not self.url.endswith("/api/v1/training/gpu/report"):
+            self.url = self.url + "/api/v1/training/gpu/report"
+        self.token = (token or "").strip()
+        self.run_id = run_id
+        self.platform = platform
+        self.every_steps = max(1, every_steps)
+        self.enabled = bool(self.url)
+        self._fails = 0
+        self._base: dict = {}
+        if self.enabled:
+            print(f"📡 Live reporting → {self.url}  (run {run_id})")
+
+    def set_base(self, **fields) -> None:
+        """Fields resent with every heartbeat (gpu, model, batch size…)."""
+        self._base.update({k: v for k, v in fields.items() if v is not None})
+
+    def send(self, **fields) -> None:
+        if not self.enabled or self._fails >= 8:
+            return
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        payload = dict(self._base)
+        payload.update(fields)
+        payload["runId"] = self.run_id
+        payload["platform"] = self.platform
+        data = _json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(self.url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+        if self.token:
+            req.add_header("x-admin-token", self.token)
+        try:
+            with urllib.request.urlopen(req, timeout=8):
+                self._fails = 0
+        except Exception as exc:
+            self._fails += 1
+            if self._fails in (1, 8):
+                why = getattr(exc, "reason", exc)
+                print(f"📡 (reporting failed: {why}"
+                      + ("; giving up, training continues)" if self._fails >= 8 else ")"))
+
+
+def make_report_callback(reporter: "PanelReporter", deadline_ts: float | None):
+    """TrainerCallback that streams step/loss/ETA to the control panel."""
+    from transformers import TrainerCallback
+
+    class ReportCallback(TrainerCallback):
+        def __init__(self):
+            self.start = time.time()
+            self.last_loss = None
+
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            if logs and "loss" in logs:
+                try:
+                    self.last_loss = float(logs["loss"])
+                except (TypeError, ValueError):
+                    pass
+            return control
+
+        def on_step_end(self, args, state, control, **kwargs):
+            step = int(state.global_step or 0)
+            if step % reporter.every_steps and step != 1:
+                return control
+            elapsed = time.time() - self.start
+            per_step = elapsed / max(1, step)
+            reporter.send(
+                phase="training",
+                step=step,
+                totalSteps=int(state.max_steps or 0),
+                loss=self.last_loss,
+                learningRate=(state.log_history[-1].get("learning_rate")
+                              if state.log_history else None),
+                secondsPerStep=round(per_step, 3),
+                budgetSecondsLeft=(round(deadline_ts - time.time()) if deadline_ts else None),
+            )
+            return control
+
+    return ReportCallback()
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +488,45 @@ def to_chat_dataset(rows, Dataset, use_system: bool):
     return Dataset.from_list([convert(r) for r in rows])
 
 
+def to_text_dataset(rows, tokenizer, Dataset, use_system: bool, drain: bool = True):
+    """Rows → a single-column {"text": ...} Dataset, in ONE low-memory pass.
+
+    The old path built a `messages` column, wrapped it in a Dataset and then
+    `.map()`-ed it into `text` — three full copies of the corpus in RAM at the
+    same time, which is what killed Colab's 12.7 GB before training even
+    started. Here each row is templated immediately and (with `drain`) dropped
+    from the source list, so peak RAM stays close to one copy.
+    """
+    texts: list[str] = []
+    total = len(rows)
+    for i in range(total):
+        row = rows[i]
+        if drain:
+            rows[i] = None  # free the source row as soon as it is templated
+        messages = []
+        if use_system:
+            messages.append({"role": "system", "content": SYSTEM_PROMPT})
+        user = row.get("instruction", "")
+        context = row.get("input", "")
+        if context:
+            user = f"{user}\n\n{context}"
+        messages.append({"role": "user", "content": user})
+        messages.append({"role": "assistant", "content": row.get("output", "")})
+        try:
+            texts.append(tokenizer.apply_chat_template(messages, tokenize=False))
+        except Exception:
+            texts.append("".join(f"{m['role']}: {m['content']}\n" for m in messages))
+        if drain and i % 2000 == 0:
+            gc.collect()
+    if drain:
+        del rows[:]
+    ds = Dataset.from_dict({"text": texts})
+    del texts
+    gc.collect()
+    return ds
+
+
+
 # ---------------------------------------------------------------------------
 # 2. TIME BUDGET
 # ---------------------------------------------------------------------------
@@ -250,24 +560,41 @@ def make_time_callback(deadline_ts: float, label: str = "budget"):
 
 
 def measure_seconds_per_step(model, tokenizer, dataset, args, torch, probe_steps: int) -> float:
-    """Run a handful of throwaway steps to learn how fast THIS GPU really is."""
-    print(f"\n⏱️  Speed probe — running {probe_steps} steps to measure your GPU…")
+    """Run a handful of throwaway steps to learn how fast THIS GPU really is.
+
+    Doubles as an OOM canary: if the configuration cannot fit, we find out in
+    ~30 seconds instead of 40 minutes into the real run.
+    """
+    print(f"\n⏱️  Speed probe — running {probe_steps} steps to measure your GPU…"
+          f"{gpu_memory_note(torch)}")
     probe_ds = dataset.select(range(min(len(dataset), probe_steps * 16 + 32)))
     cfg = build_sft_config(args, torch, max_steps=probe_steps, output_dir=str(Path(args.output) / "_probe"),
                            warmup_steps=0, save_steps=10 ** 9, eval_dataset=None, logging_steps=probe_steps)
     trainer = make_trainer(model, tokenizer, probe_ds, None, cfg)
     start = time.time()
-    trainer.train()
-    elapsed = time.time() - start
+    try:
+        trainer.train()
+        elapsed = time.time() - start
+    finally:
+        # Order matters: kill the optimizer/grad state BEFORE the gc pass,
+        # otherwise several GB stay pinned on the GPU for the real run.
+        try:
+            trainer.model.zero_grad(set_to_none=True)
+        except Exception:
+            pass
+        for attr in ("optimizer", "lr_scheduler", "accelerator", "model_wrapped"):
+            try:
+                setattr(trainer, attr, None)
+            except Exception:
+                pass
+        del trainer, cfg, probe_ds
+        free_memory(torch, "after speed probe")
+        shutil.rmtree(Path(args.output) / "_probe", ignore_errors=True)
     per_step = elapsed / max(1, probe_steps)
     print(f"⏱️  ≈{per_step:.2f} s/step on this GPU "
-          f"(batch {cfg.per_device_train_batch_size} × grad-accum {cfg.gradient_accumulation_steps})")
-    del trainer
-    try:
-        torch.cuda.empty_cache()
-    except Exception:
-        pass
+          f"(batch {args.batch_size} × grad-accum {args.grad_accum})")
     return per_step
+
 
 
 # ---------------------------------------------------------------------------
@@ -324,32 +651,62 @@ def build_sft_config(args, torch, max_steps: int, output_dir: str,
         fp16=not bf16,
         bf16=bf16,
         logging_steps=logging_steps,
-        optim="adamw_8bit",
+        optim=args.optim,
         weight_decay=0.01,
         seed=args.seed,
         output_dir=output_dir,
         save_strategy="steps",
         save_steps=save_steps,
-        save_total_limit=2,
+        save_total_limit=1,           # each checkpoint is ~100 MB of disk + RAM
         report_to="none",
         max_seq_length=args.max_seq_length,
         packing=args.packing,
         dataset_text_field="text",
-        dataset_num_proc=2,
+        # --- memory guards -------------------------------------------------
+        # >1 proc forks the process AFTER CUDA is initialised: on Colab that
+        # duplicates a ~4 GB parent and takes the whole session down.
+        dataset_num_proc=args.dataset_num_proc,
+        dataloader_num_workers=0,
+        dataloader_pin_memory=False,
+        gradient_checkpointing=True,
+        # Periodically hand fragmented blocks back to the allocator.
+        torch_empty_cache_steps=args.empty_cache_steps or None,
     )
     if eval_dataset is not None:
-        kwargs.update(eval_strategy="steps", eval_steps=max(50, max_steps // 4),
-                      per_device_eval_batch_size=args.batch_size)
+        kwargs.update(
+            eval_strategy="steps",
+            eval_steps=max(50, max_steps // 4),
+            # Evaluation is the single biggest memory spike in a run: batch 1,
+            # stream the losses out, and never keep logits (vocab 150k × seq
+            # 1024 × float32 is ~600 MB *per sample*).
+            per_device_eval_batch_size=1,
+            eval_accumulation_steps=1,
+            prediction_loss_only=True,
+        )
+    # TRL renamed max_seq_length → max_length in 0.13+. Silently dropping it
+    # would fall back to a LONGER default sequence and OOM the card.
+    import inspect
+    try:
+        fields = set(inspect.signature(SFTConfig.__init__).parameters)
+        if "max_seq_length" not in fields and "max_length" in fields:
+            kwargs["max_length"] = kwargs.pop("max_seq_length")
+    except (TypeError, ValueError):
+        pass
+
     kwargs = _filter_kwargs(SFTConfig, kwargs)
     try:
         return SFTConfig(**kwargs)
     except TypeError as exc:
         # Last resort: drop whatever the constructor complained about.
-        for key in ("max_seq_length", "packing", "dataset_num_proc",
-                    "dataset_text_field", "eval_strategy", "eval_steps"):
+        for key in ("max_seq_length", "max_length", "packing", "dataset_num_proc",
+                    "dataset_text_field", "eval_strategy", "eval_steps",
+                    "torch_empty_cache_steps", "eval_accumulation_steps",
+                    "prediction_loss_only", "gradient_checkpointing",
+                    "dataloader_pin_memory", "dataloader_num_workers"):
             kwargs.pop(key, None)
         print(f"ℹ️  Falling back to a minimal SFTConfig ({exc})")
         return SFTConfig(**kwargs)
+
 
 
 def latest_checkpoint(output_dir: str):
@@ -381,6 +738,7 @@ def chat_once(model, tokenizer, torch, prompt: str, max_new_tokens: int = 256) -
 
 
 def run_tests(model, tokenizer, torch, prompts: list[str], output_dir: str) -> None:
+    free_memory(torch, "before tests")
     try:
         from unsloth import FastLanguageModel
         FastLanguageModel.for_inference(model)
@@ -394,13 +752,21 @@ def run_tests(model, tokenizer, torch, prompts: list[str], output_dir: str) -> N
         try:
             reply = chat_once(model, tokenizer, torch, prompt)
         except Exception as exc:
-            reply = f"(test failed: {exc})"
+            if is_oom_error(exc):
+                free_memory(torch)
+                try:
+                    reply = chat_once(model, tokenizer, torch, prompt, max_new_tokens=96)
+                except Exception as exc2:
+                    reply = f"(test skipped — out of memory: {exc2})"
+            else:
+                reply = f"(test failed: {exc})"
         print(f"\n👤 {prompt}\n🤖 {reply}")
         transcript.append({"prompt": prompt, "reply": reply})
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     (Path(output_dir) / "test_results.json").write_text(
         json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8")
     print("\n" + "=" * 70)
+
 
 
 def write_modelfile(output_dir: str, name: str) -> None:
@@ -415,6 +781,49 @@ def write_modelfile(output_dir: str, name: str) -> None:
     )
     (Path(output_dir) / "Modelfile").write_text(content, encoding="utf-8")
     print(f"📝 Modelfile written → ollama create {name.lower()} -f {output_dir}/Modelfile")
+
+
+def export_gguf(model, tokenizer, torch, out: Path, args) -> None:
+    """GGUF export, retried with a smaller memory footprint on OOM.
+
+    This step merges the LoRA back into fp16 weights on the CPU, so it is the
+    RAM peak of the whole script — on Colab's 12.7 GB it is the most common
+    place for the session to die *after* a successful training run. Unsloth
+    exposes `maximum_memory_usage`; we walk it down instead of giving up.
+    """
+    import inspect
+    try:
+        supports_budget = "maximum_memory_usage" in inspect.signature(
+            model.save_pretrained_gguf).parameters
+    except (TypeError, ValueError):
+        supports_budget = False
+
+    budgets = [0.6, 0.4, 0.25] if supports_budget else [None]
+    for i, budget in enumerate(budgets):
+        free_memory(torch, "before GGUF export")
+        try:
+            extra = f" (RAM budget {budget:.0%})" if budget else ""
+            print(f"📦 Exporting GGUF{extra} — this can take 5–15 minutes…")
+            kwargs = {"quantization_method": args.gguf_quant}
+            if budget is not None:
+                kwargs["maximum_memory_usage"] = budget
+            model.save_pretrained_gguf(str(out), tokenizer, **kwargs)
+            write_modelfile(str(out), args.assistant_name)
+            return
+        except Exception as exc:
+            if is_oom_error(exc) and i + 1 < len(budgets):
+                print(f"⚠️  GGUF export ran out of memory — retrying with a "
+                      f"smaller RAM budget ({budgets[i + 1]:.0%}).")
+                continue
+            print(f"⚠️  GGUF export failed: {exc}")
+            if is_oom_error(exc):
+                print("   💡 মেমোরি শেষ। LoRA adapter সেভ হয়ে গেছে — সেটাই নামান, "
+                      "পরে আলাদা সেশনে GGUF বানানো যাবে:\n"
+                      "      python train_lora.py --resume --max-steps 1 --export-gguf "
+                      f"--output {out}")
+            else:
+                print("   The LoRA adapter is still saved and usable.")
+            return
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +878,22 @@ def main() -> None:
     ap.add_argument("--no-probe", dest="probe", action="store_false", default=True)
     ap.add_argument("--resume", action="store_true", help="Resume from the last checkpoint")
     ap.add_argument("--seed", type=int, default=42)
+    # memory / OOM
+    ap.add_argument("--no-autotune", dest="autotune", action="store_false", default=True,
+                    help="Do not cap batch/seq-length to what the GPU can hold")
+    ap.add_argument("--oom-retries", type=int, default=4,
+                    help="On OOM, shrink the config and retry this many times (default: %(default)s)")
+    ap.add_argument("--max-eval-rows", type=int, default=200,
+                    help="Cap the eval set — evaluation is the biggest memory spike")
+    ap.add_argument("--no-eval", dest="eval_enabled", action="store_false", default=True,
+                    help="Skip evaluation entirely (saves the most memory)")
+    ap.add_argument("--dataset-num-proc", type=int, default=1,
+                    help="Dataset workers. >1 forks after CUDA init and can OOM Colab's RAM")
+    ap.add_argument("--empty-cache-steps", type=int, default=100,
+                    help="Release cached CUDA blocks every N steps (0 = never)")
+    ap.add_argument("--optim", default="adamw_8bit",
+                    help="Optimizer (adamw_8bit keeps optimizer states ~4× smaller)")
+
     # output
     ap.add_argument("--output", default="./my-ai-model")
     ap.add_argument("--export-gguf", action="store_true")
@@ -478,6 +903,14 @@ def main() -> None:
     ap.add_argument("--test-prompt", action="append", default=None,
                     help="Extra test prompt (repeatable)")
     ap.add_argument("--skip-tests", action="store_true")
+    # live reporting to the MY-AI control panel
+    ap.add_argument("--report-url", default=os.environ.get("MYAI_PANEL_URL", ""),
+                    help="MY-AI panel URL — live progress shows on the Training page")
+    ap.add_argument("--report-token", default=os.environ.get("MYAI_ADMIN_TOKEN", ""),
+                    help="ADMIN_PASSWORD of the panel (sent as x-admin-token)")
+    ap.add_argument("--report-every", type=int, default=5, help="Heartbeat every N steps")
+    ap.add_argument("--run-id", default=None, help="Run id shown in the panel")
+    ap.add_argument("--platform", default="colab", help="colab | kaggle | local")
     args = ap.parse_args()
 
     if args.lora_alpha is None:
@@ -499,11 +932,35 @@ def main() -> None:
     print(f"  output         : {args.output}")
 
     FastLanguageModel, torch, Dataset = load_unsloth()
+    apply_memory_caps(args, torch)
+
+    reporter = PanelReporter(args.report_url, args.report_token,
+                             run_id=args.run_id or f"{args.platform}-{int(overall_start)}",
+                             platform=args.platform, every_steps=args.report_every)
+    reporter.set_base(
+        model=args.model,
+        recipe=args.recipe or "files",
+        gpu=(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"),
+        vramGb=round(gpu_total_gb(torch), 1) or None,
+        ramGb=round(host_ram_gb(), 1) or None,
+    )
+    globals()["_REPORTER"] = reporter   # so the __main__ guard can report crashes
+    reporter.send(phase="data", event="ট্রেনিং শুরু — ডাটা প্রস্তুত হচ্ছে")
 
     print("\n===== STEP 1/4 — DATA =====")
     train_rows, val_rows = collect_rows(args)
+    n_train_rows, n_val_rows = len(train_rows), len(val_rows)
+
+    # Evaluation is the biggest single memory spike of a run; keep it tiny.
+    if not args.eval_enabled:
+        val_rows = []
+    elif args.max_eval_rows and len(val_rows) > args.max_eval_rows:
+        print(f"ℹ️  Eval set capped {len(val_rows)} → {args.max_eval_rows} rows (memory).")
+        val_rows = val_rows[:args.max_eval_rows]
 
     print("\n===== STEP 2/4 — MODEL =====")
+    reporter.send(phase="model", trainRows=n_train_rows, valRows=n_val_rows,
+                  event=f"ডাটা রেডি: {n_train_rows} train / {n_val_rows} val — মডেল লোড হচ্ছে")
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=args.model,
         max_seq_length=args.max_seq_length,
@@ -529,16 +986,13 @@ def main() -> None:
         use_rslora=False,
     )
 
-    train_ds = to_chat_dataset(train_rows, Dataset, args.use_system)
-    eval_ds = to_chat_dataset(val_rows, Dataset, args.use_system) if val_rows else None
-
-    def formatting(batch):
-        return {"text": [tokenizer.apply_chat_template(c, tokenize=False)
-                         for c in batch["messages"]]}
-
-    train_ds = train_ds.map(formatting, batched=True, remove_columns=["messages"])
-    if eval_ds is not None:
-        eval_ds = eval_ds.map(formatting, batched=True, remove_columns=["messages"])
+    # One pass, one copy: rows → "text". The lists are drained as we go so the
+    # corpus never exists twice in RAM (Colab free only has ~12.7 GB).
+    train_ds = to_text_dataset(train_rows, tokenizer, Dataset, args.use_system)
+    eval_ds = (to_text_dataset(val_rows, tokenizer, Dataset, args.use_system)
+               if val_rows else None)
+    del train_rows, val_rows
+    free_memory(torch, "dataset built")
 
     print("\n===== STEP 3/4 — TRAINING =====")
     effective_batch = args.batch_size * args.grad_accum
@@ -550,12 +1004,25 @@ def main() -> None:
     elif budget_seconds:
         per_step = 1.6  # fallback guess
         if args.probe:
-            try:
-                per_step = measure_seconds_per_step(model, tokenizer, train_ds, args,
-                                                    torch, args.probe_steps)
-            except Exception as exc:
-                print(f"⚠️  Speed probe failed ({exc}); assuming {per_step}s/step.")
+            while True:
+                try:
+                    per_step = measure_seconds_per_step(model, tokenizer, train_ds, args,
+                                                        torch, args.probe_steps)
+                    break
+                except Exception as exc:
+                    if is_oom_error(exc):
+                        # The canary died — shrink now, before the real run.
+                        step_down = shrink_for_oom(args)
+                        free_memory(torch, "probe OOM")
+                        if step_down:
+                            print(f"⚠️  Probe hit OOM — {step_down}; retrying the probe.")
+                            effective_batch = args.batch_size * args.grad_accum
+                            steps_per_epoch = max(1, len(train_ds) // effective_batch)
+                            continue
+                    print(f"⚠️  Speed probe failed ({exc}); assuming {per_step}s/step.")
+                    break
         remaining = max(120.0, (train_deadline or time.time()) - time.time())
+        per_step = max(0.05, per_step)   # never divide by ~0 on a fast/stubbed run
         max_steps = max(30, int(remaining / per_step))
         why = f"{remaining / 3600:.2f}h left ÷ {per_step:.2f}s/step"
     else:
@@ -570,44 +1037,113 @@ def main() -> None:
         print("   ⚠️  Budget covers >4 epochs of this data — increase --rows / --budget "
               "so the model sees MORE data instead of memorising the same rows.")
 
-    cfg = build_sft_config(
-        args, torch, max_steps=max_steps, output_dir=args.output,
-        warmup_steps=min(50, max(5, max_steps // 20)),
-        save_steps=max(50, max_steps // 6),
-        eval_dataset=eval_ds,
-    )
-    trainer = make_trainer(model, tokenizer, train_ds, eval_ds, cfg)
-    if train_deadline:
-        trainer.add_callback(make_time_callback(train_deadline))
-
     resume_from = latest_checkpoint(args.output) if args.resume else None
     if resume_from:
         print(f"↩️  Resuming from {resume_from}")
 
-    print("🚀 Training…\n")
-    try:
-        trainer.train(resume_from_checkpoint=resume_from)
-    except KeyboardInterrupt:
-        print("\n⏹️  Interrupted — saving what has been learned so far…")
+    # ---- train, shrinking the configuration on every OOM ------------------
+    attempt = 0
+    trainer = None
+    while True:
+        if not args.eval_enabled:
+            eval_ds = None
+        cfg = build_sft_config(
+            args, torch, max_steps=max_steps, output_dir=args.output,
+            warmup_steps=min(50, max(5, max_steps // 20)),
+            save_steps=max(50, max_steps // 6),
+            eval_dataset=eval_ds,
+        )
+        trainer = make_trainer(model, tokenizer, train_ds, eval_ds, cfg)
+        if train_deadline:
+            trainer.add_callback(make_time_callback(train_deadline))
+        if reporter.enabled:
+            trainer.add_callback(make_report_callback(reporter, train_deadline))
+        reporter.set_base(batchSize=args.batch_size, gradAccum=args.grad_accum,
+                          maxSeqLength=args.max_seq_length, packing=args.packing,
+                          oomRetries=attempt)
+        reporter.send(phase="training", totalSteps=max_steps, step=0,
+                      event=f"ট্রেনিং চলছে — {max_steps} step, batch {args.batch_size}×{args.grad_accum}")
+
+        print(f"🚀 Training…{gpu_memory_note(torch)}\n")
+        try:
+            trainer.train(resume_from_checkpoint=resume_from)
+            break
+        except KeyboardInterrupt:
+            print("\n⏹️  Interrupted — saving what has been learned so far…")
+            break
+        except Exception as exc:
+            if not is_oom_error(exc) or attempt >= args.oom_retries:
+                if is_oom_error(exc):
+                    print("\n❌ Still out of memory at the smallest safe settings.\n"
+                          "   পরের ধাপ: ছোট মডেল নিন —\n"
+                          "     --model unsloth/Qwen2.5-0.5B-Instruct\n"
+                          "   অথবা: --max-seq-length 512 --batch-size 1 --no-eval --no-packing")
+                reporter.send(phase="failed", eventLevel="error",
+                              event=f"ট্রেনিং ব্যর্থ: {str(exc).splitlines()[0][:200]}")
+                raise
+            attempt += 1
+            # Free the dead trainer FIRST, then shrink and rebuild.
+            try:
+                trainer.model.zero_grad(set_to_none=True)
+            except Exception:
+                pass
+            for attr in ("optimizer", "lr_scheduler", "accelerator", "model_wrapped"):
+                try:
+                    setattr(trainer, attr, None)
+                except Exception:
+                    pass
+            del trainer, cfg
+            trainer = None
+            free_memory(torch, f"OOM recovery {attempt}/{args.oom_retries}")
+            step_down = shrink_for_oom(args)
+            if step_down is None:
+                print("\n❌ Out of memory and nothing left to shrink.")
+                raise
+            # Pick up from the newest checkpoint so no training time is lost.
+            resume_from = latest_checkpoint(args.output) or resume_from
+            effective_batch = args.batch_size * args.grad_accum
+            steps_per_epoch = max(1, len(train_ds) // effective_batch)
+            print(f"\n🛟 OOM ধরা পড়েছে (চেষ্টা {attempt}/{args.oom_retries}) — "
+                  f"{step_down}, তারপর আবার চলছে"
+                  + (f" ({resume_from} থেকে)" if resume_from else "") + ".")
+            reporter.send(phase="oom-recovery", oomRetries=attempt, eventLevel="warn",
+                          event=f"OOM (চেষ্টা {attempt}/{args.oom_retries}) — {step_down}")
 
     print("\n===== STEP 4/4 — SAVE + EXPORT =====")
+    reporter.send(phase="saving", event="ট্রেনিং শেষ — মডেল সেভ হচ্ছে")
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(str(out))
     tokenizer.save_pretrained(str(out))
     print(f"✅ LoRA adapter + tokenizer → {out}")
 
+    # The optimizer states are several GB and are useless from here on. Drop
+    # them before the merge/GGUF step, which is the most memory-hungry part.
+    if trainer is not None:
+        for attr in ("optimizer", "lr_scheduler", "accelerator", "model_wrapped"):
+            try:
+                setattr(trainer, attr, None)
+            except Exception:
+                pass
+        del trainer
+    free_memory(torch, "before export")
+
     meta = {
         "base_model": args.model,
         "recipe": args.recipe,
-        "train_rows": len(train_rows),
-        "val_rows": len(val_rows),
+        "train_rows": n_train_rows,
+        "val_rows": n_val_rows,
         "max_steps": max_steps,
         "effective_batch": effective_batch,
         "epochs_covered": round(epochs_covered, 3),
         "time_budget_hours": args.time_budget_hours,
         "elapsed_minutes": round((time.time() - overall_start) / 60, 1),
         "max_seq_length": args.max_seq_length,
+        "batch_size": args.batch_size,
+        "grad_accum": args.grad_accum,
+        "packing": args.packing,
+        "oom_retries_used": attempt,
+        "gpu": (torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"),
         "lora_r": args.lora_r,
         "system_prompt": SYSTEM_PROMPT if args.use_system else None,
     }
@@ -615,30 +1151,46 @@ def main() -> None:
                                             encoding="utf-8")
 
     if args.save_merged_16bit:
+        free_memory(torch, "before merge")
         try:
             model.save_pretrained_merged(str(out / "merged-16bit"), tokenizer,
                                          save_method="merged_16bit")
             print(f"✅ Merged fp16 model → {out / 'merged-16bit'}")
         except Exception as exc:
-            print(f"⚠️  Merged save failed: {exc}")
+            print(f"⚠️  Merged save failed: {exc}"
+                  + ("\n   (মেমোরি শেষ — GGUF এক্সপোর্টই যথেষ্ট, এটা বাদ দিন)"
+                     if is_oom_error(exc) else ""))
+        free_memory(torch, "after merge")
 
     if args.export_gguf:
-        try:
-            print("📦 Exporting GGUF (this can take 5–15 minutes)…")
-            model.save_pretrained_gguf(str(out), tokenizer, quantization_method=args.gguf_quant)
-            write_modelfile(str(out), args.assistant_name)
-        except Exception as exc:
-            print(f"⚠️  GGUF export failed: {exc}\n   The LoRA adapter is still saved and usable.")
+        reporter.send(phase="export", event="GGUF এক্সপোর্ট চলছে (৫–১৫ মিনিট)…")
+        export_gguf(model, tokenizer, torch, out, args)
+
 
     if not args.skip_tests:
+        reporter.send(phase="testing", event="টেস্ট প্রশ্ন চালানো হচ্ছে")
         prompts = DEFAULT_TEST_PROMPTS + (args.test_prompt or [])
         run_tests(model, tokenizer, torch, prompts, str(out))
 
     total_min = (time.time() - overall_start) / 60
+    reporter.send(phase="done", step=max_steps, totalSteps=max_steps,
+                  event=f"🎉 শেষ! {total_min:.0f} মিনিটে — মডেল সেভ হয়েছে {out}")
     print(f"\n🎉 DONE in {total_min:.0f} minutes ({total_min / 60:.2f} h).")
     print(f"   Model: {out}")
     print("   Next: zip it, download it, then →  ollama create my-ai -f Modelfile")
 
 
+_REPORTER: "PanelReporter | None" = None
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except BaseException as _exc:                     # noqa: BLE001 - report then re-raise
+        if _REPORTER is not None and _REPORTER.enabled:
+            _REPORTER.send(phase="failed", eventLevel="error",
+                           event=f"{type(_exc).__name__}: {str(_exc).splitlines()[0][:200]}"
+                                 if str(_exc) else type(_exc).__name__)
+        raise

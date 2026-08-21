@@ -11,6 +11,7 @@ import { openDatabase, resolveDbPath, SNAPSHOT_TABLES } from "./server/db.ts";
 import { buildSnapshot, serializeSnapshot } from "./server/snapshot.ts";
 import { CloudSync, parseBool } from "./server/cloud-sync.ts";
 import { pushLog, recentLogs } from "./server/logs.ts";
+import { reportGpuTraining, gpuTrainingState, clearGpuTraining } from "./server/gpu-training.ts";
 import { createAdminGate, adminTokenFrom } from "./server/auth.ts";
 import { datasetStats, exportDatasetJsonl } from "./server/dataset.ts";
 import { planIngest, applyIngest } from "./server/ingest.ts";
@@ -880,6 +881,46 @@ app.get("/api/v1/ai/status", (req, res) => {
 app.get("/api/v1/ai/training", (req, res) => {
   try {
     res.json(ai.getTraining());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/* GPU training (Colab / Kaggle) — live view of the LoRA fine-tune     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Heartbeat from `train_lora.py --report-url …`. Admin-gated exactly like
+ * every other write endpoint, so a public deployment cannot be spammed.
+ */
+app.post("/api/v1/training/gpu/report", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const run = reportGpuTraining(req.body || {});
+    if (req.body?.event) {
+      pushLog(req.body.eventLevel === "error" ? "error" : req.body.eventLevel === "warn" ? "warn" : "info", "gpu-train", String(req.body.event));
+    }
+    res.json({ success: true, runId: run.id, step: run.step, phase: run.phase });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** Live state for the control panel (read-only — safe to poll). */
+app.get("/api/v1/training/gpu", (req, res) => {
+  try {
+    res.json(gpuTrainingState());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/v1/training/gpu", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    clearGpuTraining();
+    res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

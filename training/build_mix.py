@@ -31,8 +31,10 @@ Output rows:
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import json
+import os
 import random
 import re
 import sys
@@ -450,10 +452,37 @@ def identity_rows(name: str, owner: str = "") -> list[dict]:
 # 9. Main
 # ---------------------------------------------------------------------------
 
+def host_ram_gb() -> float:
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
+    except Exception:
+        return 0.0
+
+
+def ram_row_ceiling() -> int:
+    """How many rows this machine can hold without the kernel killing us.
+
+    A row averages ~900 characters and is copied several times downstream
+    (list → Dataset → tokenised → packed). ~1800 rows per free GB is the
+    empirical safe point; Colab free (12.7 GB, ~8 GB usable) lands near 14k.
+    """
+    ram = host_ram_gb()
+    if ram <= 0:
+        return 10 ** 9
+    usable = max(2.0, ram - 4.5)      # torch + CUDA context + the notebook
+    return max(2000, int(usable * 1800))
+
+
 def build(args) -> tuple[list[dict], list[dict]]:
     recipe = RECIPES[args.recipe]
     total = args.rows or int(args.budget_hours * ROWS_PER_HOUR)
     total = max(400, total)
+
+    ceiling = ram_row_ceiling()
+    if total > ceiling:
+        print(f"⚠️  RAM {host_ram_gb():.1f} GB — pool capped {total} → {ceiling} rows "
+              "so the session is not killed while tokenising.")
+        total = ceiling
     max_out = recipe["max_output_chars"]
 
     print(f"\n🍳 Recipe: {args.recipe} — {recipe['note']}")
@@ -486,17 +515,24 @@ def build(args) -> tuple[list[dict], list[dict]]:
     rows += take_from_bucket(BN_SOURCES, int(bn_target * (1 - adv)), "bn", max_out, seen)
     if adv > 0:
         rows += take_from_bucket(BN_ADVANCED_SOURCES, int(bn_target * adv), "bn", max_out, seen)
+    gc.collect()
 
     print(f"\n🇬🇧 English data ({en_target} rows):")
     rows += take_from_bucket(EN_SOURCES, int(en_target * (1 - adv)), "en", max_out, seen)
     if adv > 0:
         rows += take_from_bucket(EN_ADVANCED_SOURCES, int(en_target * adv), "en", max_out, seen)
 
+    # The dedup index has done its job — it holds one 32-byte hash per row and
+    # is pure overhead from here on.
+    seen.clear()
+    gc.collect()
+
     rng = random.Random(args.seed)
     rng.shuffle(rows)
 
     n_val = min(500, max(1, int(len(rows) * args.val_ratio))) if len(rows) > 20 else 0
     return rows[n_val:], rows[:n_val]
+
 
 
 def summarise(rows: list[dict], title: str) -> None:
